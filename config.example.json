@@ -1,0 +1,12 @@
+{
+  "ollama_url": "http://127.0.0.1:11434/api/chat",
+  "model": "qwen3.5:4b-q4_K_M",
+  "context_tokens": 32768,
+  "max_output_tokens": 4096,
+  "tts_model_dir": "models/kokoro-multi-lang-v1_1",
+  "speaker_id": 3,
+  "speech_speed": 1.0,
+  "tts_threads": 4,
+  "first_chunk_chars": 32,
+  "chunk_chars": 80
+}
