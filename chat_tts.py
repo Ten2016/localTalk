@@ -17,6 +17,7 @@ if os.name == "nt":
 
 BASE = Path(__file__).resolve().parent
 VERSION = "0.1.0"
+MIN_CHUNK_CHARS = 20
 SYSTEM_MESSAGE = {
     "role": "system",
     "content": (
@@ -38,6 +39,9 @@ def load_config():
         )
     with config_path.open(encoding="utf-8-sig") as handle:
         config = json.load(handle)
+    config.setdefault("startup_text", "你好，我在，请问有什么可以帮你？")
+    if not isinstance(config["startup_text"], str):
+        raise ValueError("startup_text 必须为字符串，留空可关闭开场语音。")
     positive_ints = (
         "context_tokens",
         "max_output_tokens",
@@ -50,8 +54,8 @@ def load_config():
             raise ValueError(f"config.json 中 {name} 必须为正整数。")
     if config["context_tokens"] <= config["max_output_tokens"] + 512:
         raise ValueError("上下文窗口必须为输入保留足够空间。")
-    if min(config["first_chunk_chars"], config["chunk_chars"]) < 12:
-        raise ValueError("文本分段上限至少为 12 个字符。")
+    if min(config["first_chunk_chars"], config["chunk_chars"]) < MIN_CHUNK_CHARS:
+        raise ValueError(f"文本分段上限至少为 {MIN_CHUNK_CHARS} 个字符。")
     if not 0 < config["speech_speed"] <= 3:
         raise ValueError("speech_speed 必须大于 0 且不超过 3。")
     if type(config["speaker_id"]) is not int or not 0 <= config["speaker_id"] <= 102:
@@ -94,16 +98,19 @@ class TextChunks:
         self.config = config
         self.buffer = ""
         self.first = True
+        self.previous_chars = 0
 
     def feed(self, text, final=False):
         self.buffer += text
         while self.buffer:
             limit = self.config["first_chunk_chars" if self.first else "chunk_chars"]
+            if not self.first:
+                # 按中文字符数近似约束下一段耗时，避免短音频之后突然合成长段。
+                limit = min(limit, max(MIN_CHUNK_CHARS, self.previous_chars * 3 // 2))
             end = 0
             pattern = FIRST_CHUNK_END if self.first else SENTENCE_END
-            minimum = 1 if self.first else 12
             for match in pattern.finditer(self.buffer):
-                if minimum <= match.end() <= limit and re.search(
+                if MIN_CHUNK_CHARS <= match.end() <= limit and re.search(
                     r"\w", self.buffer[: match.end()]
                 ):
                     end = match.end()
@@ -112,7 +119,7 @@ class TextChunks:
                 # 长句优先在逗号或空格处分段；没有边界时保留全部字符硬切。
                 boundaries = list(re.finditer(r"[，,、：:\s]", self.buffer[:limit]))
                 end = boundaries[-1].end() if boundaries else limit
-                if end < limit // 2:
+                if end < max(MIN_CHUNK_CHARS, limit // 2):
                     end = limit
             if not end:
                 if not final:
@@ -121,6 +128,7 @@ class TextChunks:
             chunk, self.buffer = self.buffer[:end], self.buffer[end:]
             if chunk.strip():
                 self.first = False
+                self.previous_chars = len(chunk.strip())
                 yield chunk
 
 
@@ -146,10 +154,11 @@ def prepare_messages(config, history, question):
 
 
 class SpeechPipeline:
-    def __init__(self, tts, config, start):
+    def __init__(self, tts, config, start, save_audio=True):
         self.tts = tts
         self.config = config
         self.start = start
+        self.save_audio = save_audio
         self.cancelled = threading.Event()
         self.errors = queue.Queue()
         self.text_queue = queue.Queue(maxsize=4)
@@ -158,6 +167,8 @@ class SpeechPipeline:
         self.audio_seconds = 0.0
         self.first_play_seconds = None
         self.played_chunks = 0
+        self.playback_gap_seconds = 0.0
+        self.max_playback_gap_seconds = 0.0
         self.threads = [
             threading.Thread(target=self.synthesize, name="tts-synthesis"),
             threading.Thread(target=self.play, name="audio-playback"),
@@ -218,6 +229,7 @@ class SpeechPipeline:
 
     def play(self):
         output = None
+        previous_play_end = None
         try:
             while not self.cancelled.is_set():
                 item = self.get(self.audio_queue)
@@ -228,7 +240,7 @@ class SpeechPipeline:
                 sf.write(buffer, samples, sample_rate, format="WAV", subtype="PCM_16")
                 if self.cancelled.is_set():
                     break
-                if output is None:
+                if self.save_audio and output is None:
                     output_dir = BASE / "output"
                     output_dir.mkdir(exist_ok=True)
                     output = sf.SoundFile(
@@ -240,11 +252,19 @@ class SpeechPipeline:
                     )
                 if self.first_play_seconds is None:
                     self.first_play_seconds = perf_counter() - self.start
+                if previous_play_end is not None:
+                    gap = perf_counter() - previous_play_end
+                    self.playback_gap_seconds += gap
+                    self.max_playback_gap_seconds = max(
+                        self.max_playback_gap_seconds, gap
+                    )
                 winsound.PlaySound(
                     buffer.getvalue(), winsound.SND_MEMORY | winsound.SND_SYNC
                 )
-                output.write(samples)
-                output.flush()
+                previous_play_end = perf_counter()
+                if output is not None:
+                    output.write(samples)
+                    output.flush()
                 self.played_chunks += 1
         except Exception as exc:
             self.fail("音频播放", exc)
@@ -346,6 +366,10 @@ def run_turn(session, tts, config, messages):
         f"实时率：{pipeline.synthesis_seconds / pipeline.audio_seconds:.2f}"
     )
     print(
+        f"片段间等待：累计 {pipeline.playback_gap_seconds:.2f} 秒；"
+        f"最长 {pipeline.max_playback_gap_seconds:.2f} 秒"
+    )
+    print(
         f"输入：{final_result.get('prompt_eval_count', '?')} tokens；"
         f"输出：{final_result.get('eval_count', '?')} tokens\n"
     )
@@ -363,6 +387,16 @@ def main():
     print(
         f"上下文：{config['context_tokens']}；最大输出：{config['max_output_tokens']}"
     )
+    if config["startup_text"].strip():
+        print(f"开场语音：{config['startup_text']}", flush=True)
+        greeting = SpeechPipeline(tts, config, perf_counter(), save_audio=False)
+        try:
+            greeting.put(greeting.text_queue, config["startup_text"])
+            greeting.finish()
+        except (RuntimeError, ValueError, OSError) as exc:
+            print(f"开场语音未完成：{exc}")
+        finally:
+            greeting.cancel()
     print("输入问题开始对话；/clear 清空历史；/quit 退出。")
     history = []
     with requests.Session() as session:

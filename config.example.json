@@ -6,6 +6,7 @@
   "tts_model_dir": "models/kokoro-multi-lang-v1_1",
   "speaker_id": 3,
   "speech_speed": 1.0,
+  "startup_text": "你好，我在，请问有什么可以帮你？",
   "tts_threads": 4,
   "first_chunk_chars": 32,
   "chunk_chars": 80
