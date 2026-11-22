@@ -41,6 +41,7 @@
 | `localtalk/tts/kokoro.py` | Kokoro CPU 模型加载、音色与语速、音频生成 |
 | `localtalk/tts/qwen.py` | Qwen 路径解析、GPU 模型加载、音色与音频生成 |
 | `check_env.py` | 独立环境诊断，复用配置校验、路径解析和模型文件清单 |
+| `benchmark_tts.py` | Qwen 单句与批量性能对比，复用模型加载并记录测量报告 |
 
 两个 TTS 后端都提供 `generate(text)`，返回采样数据与采样率；播放流程不判断具体模型。后端在创建时才导入推理依赖，环境检查不需要先加载模型。Ollama 流由调用方显式关闭，语音异常时也能释放 HTTP 响应。
 
