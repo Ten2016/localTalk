@@ -35,6 +35,10 @@ class QwenTTS:
             dtype=torch.bfloat16,
             attn_implementation="sdpa",
         )
+        talker = self.model.model.talker
+        if talker.generation_config.pad_token_id is None:
+            # 沿用生成库以音频结束符填充的默认行为，避免每段合成重复提示。
+            talker.generation_config.pad_token_id = talker.config.codec_eos_token_id
         speakers = self.model.get_supported_speakers() or []
         if config["qwen_speaker"].lower() not in [
             speaker.lower() for speaker in speakers
