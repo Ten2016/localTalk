@@ -124,9 +124,7 @@ class SpeechPipeline:
                     self.max_playback_gap_seconds = max(
                         self.max_playback_gap_seconds, gap
                     )
-                winsound.PlaySound(
-                    buffer.getvalue(), winsound.SND_MEMORY | winsound.SND_SYNC
-                )
+                winsound.PlaySound(buffer.getvalue(), winsound.SND_MEMORY)
                 previous_play_end = perf_counter()
                 if self.save_audio:
                     save_audio_segment(
