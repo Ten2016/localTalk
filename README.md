@@ -23,8 +23,10 @@ H:/tts/
 │   └── segments/
 └── localTalk/
     ├── chat_tts.py
+    ├── check_env.py
     ├── config.json
     ├── requirements.txt
+    ├── localtalk/
     └── docs/
 ```
 
@@ -46,10 +48,9 @@ H:/tts/
 
 ```powershell
 ..\.venv\Scripts\python.exe -m pip install -r requirements.txt
-..\.venv\Scripts\python.exe -m pip check
 ```
 
-依赖文件已指定 CUDA 12.8 版 PyTorch，包含两个 TTS 后端、模型下载和静态检查所需依赖。安装完成后，使用 Qwen 的用户先执行 [GPU 与导入检查](docs/tts.md#检查-gpu-与依赖)。尚未提供完整的传递依赖锁文件。
+依赖文件已指定 CUDA 12.8 版 PyTorch，包含两个 TTS 后端、模型下载和静态检查所需依赖。准备好模型后用下方环境检查脚本统一确认；安装报错时也可运行脚本收集当前状态。尚未提供完整的传递依赖锁文件。
 
 ### 2. 核对配置及模型
 
@@ -72,7 +73,17 @@ H:/tts/
 
 确认 `ollama list` 中有配置指定的模型。仅在尚未下载默认对话模型时执行 `ollama pull qwen3.5:4b-q4_K_M`。
 
-### 3. 启动
+### 3. 检查并启动
+
+先运行环境检查：
+
+```powershell
+..\.venv\Scripts\python.exe .\check_env.py
+```
+
+脚本按 `config.json` 中的后端检查 Python 环境、依赖版本与兼容性、模型关键文件、TTS 导入以及 Ollama 服务和模型；Qwen 还会显示显卡、驱动、显存并执行一次小规模 CUDA BF16 运算。逐项显示“通过 / 注意 / 失败”和处理建议，最后汇总。缺少依赖时也能启动诊断；未下载模型时会报告缺少文件。
+
+检查不安装依赖、不下载或加载模型、不合成或播放音频。具体检查边界见 [环境检查说明](docs/tts.md#检查-gpu-与依赖)。处理失败项后启动：
 
 ```powershell
 ..\.venv\Scripts\python.exe .\chat_tts.py

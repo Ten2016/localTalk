@@ -51,31 +51,23 @@ Qwen 的 0.6B CustomVoice 提供预设声音，中文可先对比 Serena、Vivia
 
 ### 检查 GPU 与依赖
 
-先执行 `..\.venv\Scripts\python.exe -m pip check`，应显示 `No broken requirements found.`。然后检查显卡识别和实际 CUDA 运算：
+在项目根目录执行统一环境检查，无需再复制多段临时 Python 命令：
 
 ```powershell
-@'
-import torch
-
-print("PyTorch:", torch.__version__)
-print("CUDA:", torch.version.cuda)
-print("GPU 可用:", torch.cuda.is_available())
-if torch.cuda.is_available():
-    print("显卡:", torch.cuda.get_device_name(0))
-    x = torch.ones((32, 32), device="cuda")
-    print("GPU 运算结果:", (x @ x)[0, 0].item())
-'@ | ..\.venv\Scripts\python.exe -
+..\.venv\Scripts\python.exe .\check_env.py
 ```
 
-当前依赖组合应显示 PyTorch `2.10.0+cu128`、CUDA `12.8`、GPU 可用为 `True`、显卡名称，以及运算结果 `32.0`。若 GPU 不可用或运算报错，先检查 `nvidia-smi` 和 NVIDIA 驱动，暂不加载 TTS 模型。
+脚本使用运行它的解释器，显示其路径、基础环境、版本、位数，以及是否使用仓库上级的 `.venv`；复用主程序的配置校验和 Qwen 路径解析，不依赖已安装的 TTS 包才能启动。
 
-检查 Qwen 包能否导入，不加载模型：
+- 依赖：读取唯一的 `requirements.txt` 核对已安装版本，并执行 `pip check` 检查传递依赖兼容性。
+- 模型：按当前后端检查本地关键文件。在线 Qwen 模型 ID 只提示尚未验证，不触发下载；文件存在不代表哈希、完整分片或模型内容已验证。
+- Qwen：通过 `nvidia-smi` 显示显卡、驱动及总量 / 已用 / 剩余显存（MiB），在 `cuda:0` 上执行小规模 BF16 矩阵乘法，预期结果为 `32.0`；另行检查 Qwen 与音频依赖能否导入。
+- Kokoro：检查 sherpa-onnx 与音频依赖导入，不要求 CUDA 运算通过。
+- Ollama：从配置的对话地址访问对应的 `/api/tags`，检查服务是否可访问、指定模型是否已安装，不运行对话模型。
 
-```powershell
-..\.venv\Scripts\python.exe -c "from qwen_tts import Qwen3TTSModel; print('Qwen TTS 导入成功')"
-```
+每项显示“通过 / 注意 / 失败”和必要的处理建议，一项失败后继续检查其余独立项目；配置无效时跳过依赖配置的检查。外部命令单项超时 60 秒，Ollama 连接超时 5 秒。存在失败项时退出码为 1，否则为 0；只有注意项时仍需阅读提示，不能当作完整功能验收。
 
-这些检查不证明与 Ollama 同时运行时显存足够，完整效果仍需实际合成验证。
+脚本不安装依赖、下载模型、合成或播放音频。显存是检查时的快照，不证明 LLM 与 TTS 同时运行时显存足够；声卡输出、音质、完整模型加载仍需实际启动验证。报告包含本机路径，公开反馈前请脱敏。
 
 ## 模型目录
 

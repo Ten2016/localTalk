@@ -12,6 +12,8 @@
 
 涉及等待时间时，请附程序打印的首段提交播放时间、累计合成时间和音频长度。不要公开个人对话、机器上的私有路径、访问凭证或未经授权的录音。
 
+环境问题可运行 `..\.venv\Scripts\python.exe .\check_env.py`，提供脱敏后的检查报告。它不会加载模型或播放声音，但会检查依赖导入、执行小规模 GPU 运算并访问配置的 Ollama 服务。
+
 功能建议请说明使用场景与希望解决的问题。较大的功能调整，建议先开 Issue 讨论。
 
 ## 本地开发
@@ -26,9 +28,25 @@
 
 开发和运行共用上级的 `.venv`，依赖仅维护 `requirements.txt`。仅做静态检查时可按该文件中的 Ruff 版本单独安装 Ruff，无需下载 GPU 依赖。
 
-`chat_tts.py` 是程序入口，包含分句、Ollama 请求、TTS 后端选择、合成与播放流程；`config.json` 是唯一运行配置，随仓库管理，`*_desc` 字段说明参数用途及可选值。模型、虚拟环境和音频输出均放在仓库外；模型路径及 `audio_output_dir` 由配置指定。依赖统一维护在 `requirements.txt`，安装步骤见 [TTS 选型与切换](docs/tts.md)。
+`chat_tts.py` 保留命令行交互和单轮对话协调，运行实现按职责放在 `localtalk/` 包内：
 
-沿用四空格缩进和 UTF-8 编码，通过 Ruff 统一 Python 格式并检查常见错误；配置见 `.editorconfig` 和 `pyproject.toml`。保持改动范围集中，不为单文件程序引入无关框架或目录层级。
+| 文件 | 职责 |
+| --- | --- |
+| `chat_tts.py` | 输入、历史更新、开场语、连接文本输出与语音播放、展示运行指标 |
+| `localtalk/config.py` | 读取与校验唯一配置，确定仓库根目录 |
+| `localtalk/ollama.py` | 系统提示词、上下文预算、请求参数、流式响应解析 |
+| `localtalk/text.py` | 分段边界、短句合并和片段长度限制 |
+| `localtalk/speech.py` | 文本与音频队列、合成线程、播放线程、最近 100 段音频保存 |
+| `localtalk/tts/__init__.py` | 按配置创建 TTS 后端 |
+| `localtalk/tts/kokoro.py` | Kokoro CPU 模型加载、音色与语速、音频生成 |
+| `localtalk/tts/qwen.py` | Qwen 路径解析、GPU 模型加载、音色与音频生成 |
+| `check_env.py` | 独立环境诊断，复用配置校验、路径解析和模型文件清单 |
+
+两个 TTS 后端都提供 `generate(text)`，返回采样数据与采样率；播放流程不判断具体模型。后端在创建时才导入推理依赖，环境检查不需要先加载模型。Ollama 流由调用方显式关闭，语音异常时也能释放 HTTP 响应。
+
+`config.json` 是唯一运行配置，随仓库管理，`*_desc` 字段说明参数用途及可选值。模型、虚拟环境和音频输出均放在仓库外；模型路径及 `audio_output_dir` 由配置指定，拆分模块不改变相对路径基准。依赖统一维护在 `requirements.txt`，安装步骤见 [TTS 选型与切换](docs/tts.md)。
+
+沿用四空格缩进和 UTF-8 编码，通过 Ruff 统一 Python 格式并检查常见错误；配置见 `.editorconfig` 和 `pyproject.toml`。保持改动范围集中，不引入无关框架或目录层级。
 
 ## 检查改动
 
@@ -49,6 +67,6 @@ CI 执行相同的格式、静态规则和运行配置 JSON 检查，不安装�
 - 提交信息简洁具体，例如 `修复短回答等待标点后未及时朗读的问题`。
 - 在 PR 中说明实际执行的检查及结果，明确尚未验证的场景。
 - 用法或配置变化同步更新 README、使用说明和 `config.json` 中的参数说明。
-- 用户可感知的功能变化由维护者统一整理进 CHANGELOG；版本入口为 `chat_tts.py` 中的 `VERSION`。
+- 用户可感知的功能变化由维护者统一整理进 CHANGELOG；版本入口为 `localtalk/__init__.py` 中的 `VERSION`。
 
 提交内容应为原创或已获授权，遵循项目 [MIT 许可证](LICENSE)，保留第三方来源与许可声明。`config.json` 使用可共享的模型 ID 或相对路径；不要提交模型权重、虚拟环境或对话音频。
