@@ -222,14 +222,15 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# LocalTalk 本地配置与运行产物
+# LocalTalk 本地环境与运行产物
 .venv/
 *.pyc
-config.json
 .env.*
 output/
 models/
 kokoro-*/
+Qwen3-TTS*/
+*.wav
 *.tar.bz2
 .DS_Store
 Thumbs.db

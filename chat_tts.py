@@ -5,10 +5,9 @@ import queue
 import re
 import threading
 from pathlib import Path
-from time import perf_counter
+from time import perf_counter, time_ns
 
 import requests
-import sherpa_onnx
 import soundfile as sf
 
 if os.name == "nt":
@@ -16,8 +15,9 @@ if os.name == "nt":
 
 
 BASE = Path(__file__).resolve().parent
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 MIN_CHUNK_CHARS = 20
+AUDIO_HISTORY_LIMIT = 100
 SYSTEM_MESSAGE = {
     "role": "system",
     "content": (
@@ -34,11 +34,20 @@ FIRST_CHUNK_END = re.compile(r"[，：]|(?<!\d)[,:]|" + SENTENCE_END.pattern)
 def load_config():
     config_path = BASE / "config.json"
     if not config_path.exists():
-        raise FileNotFoundError(
-            "请先复制 config.example.json 为 config.json，并配置模型目录。"
-        )
+        raise FileNotFoundError("缺少 config.json，请从仓库恢复该文件并配置模型目录。")
     with config_path.open(encoding="utf-8-sig") as handle:
         config = json.load(handle)
+    config.setdefault("tts_backend", "kokoro")
+    config.setdefault("qwen_model", "../Qwen3-TTS-12Hz-0.6B-CustomVoice")
+    config.setdefault("qwen_speaker", "Serena")
+    config.setdefault("audio_output_dir", "../output/segments")
+    if (
+        not isinstance(config["audio_output_dir"], str)
+        or not config["audio_output_dir"].strip()
+    ):
+        raise ValueError("audio_output_dir 必须为非空目录路径。")
+    if config["tts_backend"] not in ("kokoro", "qwen3"):
+        raise ValueError("tts_backend 仅支持 kokoro 或 qwen3。")
     config.setdefault("startup_text", "你好，我在，请问有什么可以帮你？")
     if not isinstance(config["startup_text"], str):
         raise ValueError("startup_text 必须为字符串，留空可关闭开场语音。")
@@ -58,12 +67,65 @@ def load_config():
         raise ValueError(f"文本分段上限至少为 {MIN_CHUNK_CHARS} 个字符。")
     if not 0 < config["speech_speed"] <= 3:
         raise ValueError("speech_speed 必须大于 0 且不超过 3。")
-    if type(config["speaker_id"]) is not int or not 0 <= config["speaker_id"] <= 102:
-        raise ValueError("Kokoro v1.1 的 speaker_id 范围是 0～102。")
+    if config["tts_backend"] == "kokoro":
+        if (
+            type(config["speaker_id"]) is not int
+            or not 0 <= config["speaker_id"] <= 102
+        ):
+            raise ValueError("Kokoro v1.1 的 speaker_id 范围是 0～102。")
+    else:
+        if config["speech_speed"] != 1.0:
+            raise ValueError(
+                "当前 Qwen3 接入不支持数值语速控制，请将 speech_speed 设为 1.0。"
+            )
+        for name in ("qwen_model", "qwen_speaker"):
+            if not isinstance(config[name], str) or not config[name].strip():
+                raise ValueError(f"{name} 必须为非空字符串。")
     return config
 
 
 def create_tts(config):
+    if config["tts_backend"] == "qwen3":
+        try:
+            import torch
+            from qwen_tts import Qwen3TTSModel
+        except ImportError as exc:
+            raise RuntimeError(
+                "Qwen3 依赖未安装完整，请使用统一环境安装 requirements.txt，步骤见 docs/tts.md。"
+            ) from exc
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "Qwen3 GPU 后端需要可用的 CUDA PyTorch，请检查安装及驱动。"
+            )
+        model_path = Path(config["qwen_model"]).expanduser()
+        local_path = (
+            model_path.is_absolute()
+            or config["qwen_model"].startswith((".", "~"))
+            or "\\" in config["qwen_model"]
+        )
+        if not model_path.is_absolute():
+            model_path = BASE / model_path
+        if local_path and not model_path.is_dir():
+            raise FileNotFoundError(
+                f"找不到 Qwen 模型目录：{model_path}。请按 docs/tts.md 下载模型，"
+                "或修改 config.json 中的 qwen_model。"
+            )
+        model_name = str(model_path) if model_path.exists() else config["qwen_model"]
+        tts = Qwen3TTSModel.from_pretrained(
+            model_name,
+            device_map="cuda:0",
+            dtype=torch.bfloat16,
+            attn_implementation="sdpa",
+        )
+        speakers = tts.get_supported_speakers() or []
+        if config["qwen_speaker"].lower() not in [
+            speaker.lower() for speaker in speakers
+        ]:
+            raise ValueError(f"Qwen3 音色不受支持，可用音色：{', '.join(speakers)}")
+        return tts
+
+    import sherpa_onnx
+
     model_dir = Path(config["tts_model_dir"]).expanduser()
     if not model_dir.is_absolute():
         model_dir = BASE / model_dir
@@ -91,6 +153,38 @@ def create_tts(config):
     if not tts_config.validate():
         raise ValueError("TTS 配置校验失败。")
     return sherpa_onnx.OfflineTts(tts_config)
+
+
+def generate_audio(tts, config, text):
+    if config["tts_backend"] == "qwen3":
+        waveforms, sample_rate = tts.generate_custom_voice(
+            text=text,
+            language="Chinese",
+            speaker=config["qwen_speaker"],
+        )
+        if len(waveforms) != 1:
+            raise RuntimeError("Qwen3 没有返回单段音频。")
+        return waveforms[0], sample_rate
+    audio = tts.generate(
+        text=text, sid=config["speaker_id"], speed=config["speech_speed"]
+    )
+    return audio.samples, audio.sample_rate
+
+
+def save_audio_segment(wav_bytes, output_dir):
+    directory = Path(output_dir).expanduser()
+    if not directory.is_absolute():
+        directory = BASE / directory
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / f"segment-{time_ns():020d}.wav").open("xb") as handle:
+        handle.write(wav_bytes)
+    files = sorted(
+        path
+        for path in directory.iterdir()
+        if path.is_file() and re.fullmatch(r"segment-\d{20}\.wav", path.name)
+    )
+    for path in files[:-AUDIO_HISTORY_LIMIT]:
+        path.unlink()
 
 
 class TextChunks:
@@ -161,7 +255,8 @@ class SpeechPipeline:
         self.save_audio = save_audio
         self.cancelled = threading.Event()
         self.errors = queue.Queue()
-        self.text_queue = queue.Queue(maxsize=4)
+        # 只排队文本，避免音频反压阻塞 Ollama 读取；单轮输出已有 token 上限。
+        self.text_queue = queue.Queue()
         self.audio_queue = queue.Queue(maxsize=3)
         self.synthesis_seconds = 0.0
         self.audio_seconds = 0.0
@@ -212,23 +307,18 @@ class SpeechPipeline:
                 if not text:
                     continue
                 start = perf_counter()
-                audio = self.tts.generate(
-                    text=text,
-                    sid=self.config["speaker_id"],
-                    speed=self.config["speech_speed"],
-                )
+                samples, sample_rate = generate_audio(self.tts, self.config, text)
                 self.synthesis_seconds += perf_counter() - start
-                if len(audio.samples) == 0:
+                if len(samples) == 0 or sample_rate <= 0:
                     raise RuntimeError("该文本片段没有生成音频。")
-                self.audio_seconds += len(audio.samples) / audio.sample_rate
-                self.put(self.audio_queue, (audio.samples, audio.sample_rate))
+                self.audio_seconds += len(samples) / sample_rate
+                self.put(self.audio_queue, (samples, sample_rate))
             if not self.cancelled.is_set():
                 self.put(self.audio_queue, None)
         except Exception as exc:
             self.fail("语音合成", exc)
 
     def play(self):
-        output = None
         previous_play_end = None
         try:
             while not self.cancelled.is_set():
@@ -240,16 +330,6 @@ class SpeechPipeline:
                 sf.write(buffer, samples, sample_rate, format="WAV", subtype="PCM_16")
                 if self.cancelled.is_set():
                     break
-                if self.save_audio and output is None:
-                    output_dir = BASE / "output"
-                    output_dir.mkdir(exist_ok=True)
-                    output = sf.SoundFile(
-                        str(output_dir / "last_reply.wav"),
-                        mode="w",
-                        samplerate=sample_rate,
-                        channels=1,
-                        subtype="PCM_16",
-                    )
                 if self.first_play_seconds is None:
                     self.first_play_seconds = perf_counter() - self.start
                 if previous_play_end is not None:
@@ -262,15 +342,13 @@ class SpeechPipeline:
                     buffer.getvalue(), winsound.SND_MEMORY | winsound.SND_SYNC
                 )
                 previous_play_end = perf_counter()
-                if output is not None:
-                    output.write(samples)
-                    output.flush()
+                if self.save_audio:
+                    save_audio_segment(
+                        buffer.getvalue(), self.config["audio_output_dir"]
+                    )
                 self.played_chunks += 1
         except Exception as exc:
             self.fail("音频播放", exc)
-        finally:
-            if output is not None:
-                output.close()
 
     def finish(self):
         self.put(self.text_queue, None)
@@ -346,6 +424,7 @@ def run_turn(session, tts, config, messages):
         for chunk in chunker.feed("", final=True):
             pipeline.put(pipeline.text_queue, chunk)
         print("\n", flush=True)
+        print(f"文本接收完成：{perf_counter() - start:.2f} 秒", flush=True)
         if final_result.get("done_reason") == "length":
             print("提示：回答达到输出上限，可能未说完。")
         pipeline.finish()
@@ -381,7 +460,7 @@ def main():
         raise RuntimeError("当前播放实现面向 Windows，请在 Win10 电脑上运行。")
     config = load_config()
     print(f"LocalTalk {VERSION} · 本地语音助手")
-    print("正在加载 CPU 语音模型……", flush=True)
+    print(f"正在加载语音模型（{config['tts_backend']}）……", flush=True)
     tts = create_tts(config)
     print(f"模型：{config['model']}")
     print(

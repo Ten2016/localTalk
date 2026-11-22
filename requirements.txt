@@ -1,3 +1,10 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+
 sherpa-onnx>=2.0.2,<3
 soundfile>=0.13,<1
 requests>=2.32,<3
+qwen-tts==0.1.1
+torch==2.10.0+cu128
+torchaudio==2.10.0+cu128
+modelscope
+ruff==0.17.6
