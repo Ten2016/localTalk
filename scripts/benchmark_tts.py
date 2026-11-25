@@ -49,9 +49,9 @@ def snapshot(config):
     else:
         result["gpu_snapshot_error"] = "找不到 nvidia-smi"
     try:
-        url = urlsplit(config["ollama_url"])
+        url = urlsplit(config["llm"]["url"])
         if not url.path.endswith("/api/chat"):
-            raise ValueError("ollama_url 路径不是 /api/chat")
+            raise ValueError("llm.url 路径不是 /api/chat")
         endpoint = urlunsplit(url._replace(path=url.path[:-4] + "ps"))
         with requests.Session() as session:
             if url.hostname in ("localhost", "127.0.0.1", "::1"):
@@ -153,8 +153,8 @@ def main():
     if args.repeat < 1:
         parser.error("--repeat 至少为 1")
     config = load_config()
-    if config["tts_backend"] != "qwen3":
-        parser.error("本脚本比较 Qwen 批量推理，请将 tts_backend 设为 qwen3")
+    if config["tts"]["backend"] != "qwen3":
+        parser.error("本脚本比较 Qwen 批量推理，请将 tts.backend 设为 qwen3")
     directory = Path(args.output_dir).expanduser()
     if not directory.is_absolute():
         directory = BASE / directory
@@ -167,10 +167,10 @@ def main():
         "created_at": datetime.now().astimezone().isoformat(),
         "python": sys.version,
         "platform": platform.platform(),
-        "model": config["qwen_model"],
-        "speaker": config["qwen_speaker"],
-        "ollama_model": config["model"],
-        "context_tokens": config["context_tokens"],
+        "model": config["tts"]["qwen3"]["model"],
+        "speaker": config["tts"]["qwen3"]["speaker"],
+        "ollama_model": config["llm"]["model"],
+        "context_tokens": config["llm"]["context_tokens"],
         "texts": TEXTS,
         "requested_repeats": args.repeat,
         "mode": args.mode,
@@ -202,7 +202,7 @@ def main():
         save()
         print("正在加载 Qwen 模型……", flush=True)
         start = perf_counter()
-        tts = QwenTTS(config)
+        tts = QwenTTS(config["tts"]["qwen3"])
         torch.cuda.synchronize(0)
         report["load_seconds"] = perf_counter() - start
         report["gpu"] = torch.cuda.get_device_name(0)

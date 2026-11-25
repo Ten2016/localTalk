@@ -11,7 +11,7 @@ def resolve_qwen_model(name):
     if local_path and not model_path.is_dir():
         raise FileNotFoundError(
             f"找不到 Qwen 模型目录：{model_path}。请按 docs/tts.md 下载模型，"
-            "或修改 config.json 中的 qwen_model。"
+            "或修改 config.json 中的 tts.qwen3.model。"
         )
     return str(model_path) if model_path.exists() else name
 
@@ -29,8 +29,9 @@ class QwenTTS:
             raise RuntimeError(
                 "Qwen3 GPU 后端需要可用的 CUDA PyTorch，请检查安装及驱动。"
             )
+        model = resolve_qwen_model(config["model"])
         self.model = Qwen3TTSModel.from_pretrained(
-            resolve_qwen_model(config["qwen_model"]),
+            model,
             device_map="cuda:0",
             dtype=torch.bfloat16,
             attn_implementation="sdpa",
@@ -40,11 +41,14 @@ class QwenTTS:
             # 沿用生成库以音频结束符填充的默认行为，避免每段合成重复提示。
             talker.generation_config.pad_token_id = talker.config.codec_eos_token_id
         speakers = self.model.get_supported_speakers() or []
-        if config["qwen_speaker"].lower() not in [
-            speaker.lower() for speaker in speakers
-        ]:
+        if config["speaker"].lower() not in [speaker.lower() for speaker in speakers]:
             raise ValueError(f"Qwen3 音色不受支持，可用音色：{', '.join(speakers)}")
-        self.speaker = config["qwen_speaker"]
+        self.speaker = config["speaker"]
+        self.cache_identity = {
+            "backend": "qwen3",
+            "model": model,
+            "speaker": self.speaker,
+        }
 
     def generate(self, text):
         waveforms, sample_rate = self.model.generate_custom_voice(

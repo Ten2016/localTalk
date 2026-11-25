@@ -16,7 +16,7 @@ class KokoroTTS:
     def __init__(self, config):
         import sherpa_onnx
 
-        model_dir = Path(config["tts_model_dir"]).expanduser()
+        model_dir = Path(config["model_dir"]).expanduser()
         if not model_dir.is_absolute():
             model_dir = BASE / model_dir
 
@@ -39,7 +39,7 @@ class KokoroTTS:
                     ),
                 ),
                 provider="cpu",
-                num_threads=config["tts_threads"],
+                num_threads=config["threads"],
             ),
             max_num_sentences=1,
         )
@@ -47,7 +47,13 @@ class KokoroTTS:
             raise ValueError("TTS 配置校验失败。")
         self.model = sherpa_onnx.OfflineTts(tts_config)
         self.speaker = config["speaker_id"]
-        self.speed = config["speech_speed"]
+        self.speed = config["speed"]
+        self.cache_identity = {
+            "backend": "kokoro",
+            "model": str(model_dir.resolve()),
+            "speaker_id": self.speaker,
+            "speed": self.speed,
+        }
 
     def generate(self, text):
         audio = self.model.generate(text=text, sid=self.speaker, speed=self.speed)

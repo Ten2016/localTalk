@@ -16,7 +16,7 @@
 git pull --ff-only
 ```
 
-确认 `config.json` 的 `tts_backend` 是 `qwen3`，测试期间保持音色和上下文配置一致。
+确认 `config.json` 的 `tts.backend` 是 `qwen3`，测试期间保持音色和上下文配置一致。
 
 ## 2. 场景 A：TTS 独占显卡
 
@@ -24,14 +24,14 @@ Ollama 服务保持运行，但卸载其驻留模型。先关闭其他会请求 
 
 ```powershell
 $cfg = Get-Content .\config.json -Raw -Encoding UTF8 | ConvertFrom-Json
-ollama stop $cfg.model
+ollama stop $cfg.llm.model
 ollama ps
 ```
 
 确认 `ollama ps` 没有驻留模型；如果仍有其他模型，按其名称执行 `ollama stop 模型名`。这只释放运行资源，不删除模型文件。CLI 默认连接本机 Ollama；配置远端服务时需在对应服务端管理模型。
 
 ```powershell
-..\.venv\Scripts\python.exe .\benchmark_tts.py --label solo
+..\.venv\Scripts\python.exe -m scripts.benchmark_tts --label solo
 ```
 
 等待测试自行结束。预热和正式测试可能需要数分钟，脚本会逐次打印进度。
@@ -43,21 +43,21 @@ ollama ps
 ```powershell
 $cfg = Get-Content .\config.json -Raw -Encoding UTF8 | ConvertFrom-Json
 $body = @{
-    model = $cfg.model
+    model = $cfg.llm.model
     messages = @(@{ role = "user"; content = "你好" })
     stream = $false
     think = $false
     keep_alive = "1h"
-    options = @{ num_ctx = $cfg.context_tokens; num_predict = 1 }
+    options = @{ num_ctx = $cfg.llm.context_tokens; num_predict = 1 }
 } | ConvertTo-Json -Depth 6
-Invoke-RestMethod -Uri $cfg.ollama_url -Method Post -ContentType "application/json; charset=utf-8" -Body ([System.Text.Encoding]::UTF8.GetBytes($body))
+Invoke-RestMethod -Uri $cfg.llm.url -Method Post -ContentType "application/json; charset=utf-8" -Body ([System.Text.Encoding]::UTF8.GetBytes($body))
 ollama ps
 ```
 
 确认 `CONTEXT` 与配置一致，记录 `PROCESSOR` 是否为 `100% GPU`，然后执行：
 
 ```powershell
-..\.venv\Scripts\python.exe .\benchmark_tts.py --label resident
+..\.venv\Scripts\python.exe -m scripts.benchmark_tts --label resident
 ```
 
 此场景观察显存共存影响，不代表两个模型正在争抢计算资源。报告记录 TTS 加载前后、正式轮次前后的 Ollama `/api/ps` 状态，可检查 `context_length`、`size_vram` 和是否仍然驻留。快照失败会保存原因，不能将失败当作没有驻留模型。
@@ -72,16 +72,16 @@ ollama ps
 cd H:\tts\localTalk
 $cfg = Get-Content .\config.json -Raw -Encoding UTF8 | ConvertFrom-Json
 $body = @{
-    model = $cfg.model
+    model = $cfg.llm.model
     messages = @(@{ role = "user"; content = "请详细讲一个温暖的旅行故事，至少写八百字。" })
     stream = $false
     think = $false
     keep_alive = "1h"
-    options = @{ num_ctx = $cfg.context_tokens; num_predict = 1024 }
+    options = @{ num_ctx = $cfg.llm.context_tokens; num_predict = 1024 }
 } | ConvertTo-Json -Depth 6
 while ($true) {
     Write-Host "正在请求 Ollama 生成……"
-    $reply = Invoke-RestMethod -Uri $cfg.ollama_url -Method Post -ContentType "application/json; charset=utf-8" -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) -ErrorAction Stop
+    $reply = Invoke-RestMethod -Uri $cfg.llm.url -Method Post -ContentType "application/json; charset=utf-8" -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) -ErrorAction Stop
     Write-Host "本次输出 tokens：" $reply.eval_count
 }
 ```
@@ -89,10 +89,10 @@ while ($true) {
 确认这个窗口持续输出进度，在原窗口运行：
 
 ```powershell
-..\.venv\Scripts\python.exe .\benchmark_tts.py --label busy
+..\.venv\Scripts\python.exe -m scripts.benchmark_tts --label busy
 ```
 
-测试完成后停止循环。取消请求后可执行 `ollama stop $cfg.model` 释放模型；恢复正常使用时 LocalTalk 会按需加载。
+测试完成后停止循环。取消请求后可执行 `ollama stop $cfg.llm.model` 释放模型；恢复正常使用时 LocalTalk 会按需加载。
 
 ## 5. 观察与判断
 
@@ -116,8 +116,8 @@ Windows 任务管理器同时观察专用 / 共享 GPU 内存及 CUDA/Compute �
 脚本在每次调用前后同步 CUDA，防止异步提交导致计时偏小；每轮重置峰值统计，不清空缓存。两种方式共享一份模型，缓存保留峰值不能当作各自独占需求。需要进一步比较时，在相同场景分别启动新进程：
 
 ```powershell
-..\.venv\Scripts\python.exe .\benchmark_tts.py --label resident-single --mode sequential
-..\.venv\Scripts\python.exe .\benchmark_tts.py --label resident-batch --mode batch2
+..\.venv\Scripts\python.exe -m scripts.benchmark_tts --label resident-single --mode sequential
+..\.venv\Scripts\python.exe -m scripts.benchmark_tts --label resident-batch --mode batch2
 ```
 
 判断顺序：

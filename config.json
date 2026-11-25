@@ -1,32 +1,56 @@
 {
-  "ollama_url": "http://127.0.0.1:11434/api/chat",
-  "ollama_url_desc": "Ollama 对话接口地址；同一台电脑保持默认即可。",
-  "model": "qwen3.5:4b-q4_K_M",
-  "model_desc": "对话模型名称，须与 ollama list 中的名称一致；与下方 TTS 模型独立。",
-  "context_tokens": 32768,
-  "context_tokens_desc": "上下文窗口，单位 token，包含系统提示、历史、本次输入和输出；32768 为 32K，GPU 显存紧张可尝试 16384。",
-  "max_output_tokens": 4096,
-  "max_output_tokens_desc": "单次回答的最大输出 token 数，不是字符数；需要小于上下文窗口。",
-  "tts_backend": "qwen3",
-  "tts_backend_desc": "可选 kokoro（CPU）或 qwen3（NVIDIA CUDA GPU）；共用上级 .venv，依赖统一安装 requirements.txt，修改后重启。",
-  "tts_model_dir": "../kokoro-multi-lang-v1_1",
-  "tts_model_dir_desc": "仅 kokoro 使用，填写解压后的模型目录；相对路径以 chat_tts.py 所在目录为准，Windows 路径建议使用 /。",
-  "qwen_model": "../Qwen3-TTS-12Hz-0.6B-CustomVoice",
-  "qwen_model_desc": "仅 qwen3 使用，推荐 Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice；可填模型 ID 或已下载的本地目录。当前仅接入 CustomVoice，不能直接换成 Base 或 VoiceDesign。",
-  "qwen_speaker": "Serena",
-  "qwen_speaker_desc": "仅 qwen3 使用；推荐 Serena（温暖柔和女声）、Vivian（明亮女声）、Uncle_Fu（低沉醇厚男声）。完整音色说明：https://github.com/QwenLM/Qwen3-TTS#custom-voice-generate ；官方试听：https://modelscope.cn/studios/Qwen/Qwen3-TTS",
-  "speaker_id": 3,
-  "speaker_id_desc": "仅 kokoro v1.1 使用；推荐试听 3（zf_001，中文女声）、40（zf_073，中文女声）、58（zm_009，中文男声）。全部音色及试听：https://k2-fsa.github.io/sherpa/onnx/tts/all/Chinese-English/kokoro-multi-lang-v1_1.html",
-  "speech_speed": 1.0,
-  "speech_speed_desc": "kokoro 的语速倍率，1.0 正常，大于 1 更快，小于 1 更慢，范围大于 0 且不超过 3；当前 qwen3 接入必须保持 1.0。",
-  "audio_output_dir": "../output/segments",
-  "audio_output_dir_desc": "已播放音频的保存目录，保留最近 100 段；相对路径以 chat_tts.py 所在目录为准，默认放在仓库外。",
-  "startup_text": "你好，我在，请问有什么可以帮你？",
-  "startup_text_desc": "模型加载后朗读的开场语，空字符串关闭；不请求大模型，不计入最近 100 段音频存档。",
-  "tts_threads": 4,
-  "tts_threads_desc": "仅 kokoro 使用的 CPU 合成线程数，建议先用 4；不是音频缓存数量。",
-  "first_chunk_chars": 32,
-  "first_chunk_chars_desc": "首段字符上限，至少为 20；满 20 字后遇到合适标点即可开始合成，不必等到此上限。没有合适分隔符时会硬切，回答末尾不足 20 字也会朗读。",
-  "chunk_chars": 80,
-  "chunk_chars_desc": "后续片段字符上限，至少为 20；实际还受上一段长度的 1.5 倍约束。优先沿标点切分，短句合并，无合适分隔符时会硬切。"
+  "llm": {
+    "desc": "Ollama 对话配置。url 为 /api/chat 接口，model 须与 ollama list 一致；context_tokens 为上下文 token 数，max_output_tokens 为回答上限，需为输入预留空间。",
+    "url": "http://127.0.0.1:11434/api/chat",
+    "model": "qwen3.5:4b-q4_K_M",
+    "context_tokens": 32768,
+    "max_output_tokens": 4096
+  },
+  "tts": {
+    "desc": "语音合成公共配置。backend 选择 qwen3、kokoro 或 volcengine；audio_output_dir 为 WAV 缓存目录，相对路径以项目根目录为准，保留最近使用的 100 个不同片段，包含开场语；startup_text 留空关闭开场语。chunk_chars 为所有片段的最大长度，默认 60。各后端的 chunking 分别配置首段、第二段、后续段遇标点可提交的最短长度，默认 11、20、20，均为不超过上限的正整数。前两段可沿普通标点提交，后续优先句尾，短尾段始终保留。修改后重启。",
+    "backend": "qwen3",
+    "audio_output_dir": "../output/segments",
+    "startup_text": "你好，我在，请问有什么可以帮你？",
+    "chunk_chars": 60,
+    "kokoro": {
+      "desc": "CPU 后端。model_dir 为完整模型目录；speaker_id 可试女声 3、40 或男声 58、59；speed 为语速倍率，范围 (0,3]；threads 为 CPU 线程数。音色试听：https://k2-fsa.github.io/sherpa/onnx/tts/all/Chinese-English/kokoro-multi-lang-v1_1.html",
+      "model_dir": "../kokoro-multi-lang-v1_1",
+      "speaker_id": 3,
+      "speed": 1.0,
+      "threads": 4,
+      "chunking": {
+        "first_min_chars": 11,
+        "second_min_chars": 20,
+        "later_min_chars": 20
+      }
+    },
+    "qwen3": {
+      "desc": "CUDA GPU 后端，仅支持 CustomVoice。model 可填本地模型目录或模型 ID；speaker 可试 Serena、Vivian、Uncle_Fu。当前不提供数值语速控制。音色说明：https://github.com/QwenLM/Qwen3-TTS#custom-voice-generate",
+      "model": "../Qwen3-TTS-12Hz-0.6B-CustomVoice",
+      "speaker": "Serena",
+      "chunking": {
+        "first_min_chars": 11,
+        "second_min_chars": 20,
+        "later_min_chars": 20
+      }
+    },
+    "volcengine": {
+      "desc": "火山 Seed-TTS 3.0 HTTP 流式合成（JSONL）。voice_id 填账号有权限的音色 ID；api_key_env 为保存 API Key 的环境变量名，密钥不要写入配置。language_code 为语种；sample_rate 为音频采样率；timeout_seconds 为网络读取超时秒数。voice_settings 中 speed、volume 范围 0.5～2，pitch 为 -12～12 的整数。每个文本片段独立请求，完整收取 MP3 后转成 WAV 播放并缓存。文档：https://docs.volcengine.com/docs/doubao-voice/seed-tts-3-0-http-streaming?lang=zh",
+      "voice_id": "",
+      "api_key_env": "VOLCENGINE_TTS_API_KEY",
+      "language_code": "zh",
+      "sample_rate": 24000,
+      "timeout_seconds": 60,
+      "voice_settings": {
+        "speed": 1.0,
+        "volume": 1.0,
+        "pitch": 0
+      },
+      "chunking": {
+        "first_min_chars": 11,
+        "second_min_chars": 20,
+        "later_min_chars": 20
+      }
+    }
+  }
 }

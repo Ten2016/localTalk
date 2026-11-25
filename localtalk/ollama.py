@@ -18,6 +18,7 @@ def input_size(messages):
 
 
 def prepare_messages(config, history, question):
+    config = config["llm"]
     user_message = {"role": "user", "content": question}
     budget = config["context_tokens"] - config["max_output_tokens"] - 512
     if input_size([SYSTEM_MESSAGE, user_message]) > budget:
@@ -34,8 +35,9 @@ def prepare_messages(config, history, question):
 
 
 def stream_chat(session, config, messages):
+    config = config["llm"]
     with session.post(
-        config["ollama_url"],
+        config["url"],
         json={
             "model": config["model"],
             "messages": messages,

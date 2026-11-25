@@ -62,7 +62,12 @@ def command(args):
     return output[-6000:] or "命令执行成功。"
 
 
-def check_requirements():
+def check_requirements(backend):
+    required = {"soundfile", "requests", "packaging", "ruff"} | {
+        "kokoro": {"sherpa-onnx"},
+        "qwen3": {"qwen-tts", "torch", "torchaudio", "modelscope"},
+        "volcengine": set(),
+    }[backend]
     return command(
         [
             sys.executable,
@@ -71,13 +76,18 @@ def check_requirements():
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from packaging.requirements import Requirement
+import json
+import sys
 
+required = set(json.loads(sys.argv[1]))
 failed = False
 for line in Path('requirements.txt').read_text(encoding='utf-8').splitlines():
     line = line.strip()
     if not line or line.startswith(('#', '--')):
         continue
     requirement = Requirement(line)
+    if requirement.name.lower().replace('_', '-') not in required:
+        continue
     try:
         installed = version(requirement.name)
     except PackageNotFoundError:
@@ -89,13 +99,22 @@ for line in Path('requirements.txt').read_text(encoding='utf-8').splitlines():
     failed |= not valid
 raise SystemExit(1 if failed else 0)
 """,
+            json.dumps(sorted(required)),
         ]
     )
 
 
+def check_volcengine(config):
+    name = config["tts"]["volcengine"]["api_key_env"]
+    if not os.environ.get(name, "").strip():
+        raise ValueError(f"环境变量 {name} 未设置或为空。")
+    return f"环境变量 {name} 已设置；未连接火山，不验证密钥、音色权限或余额。"
+
+
 def check_model(config):
-    if config["tts_backend"] == "qwen3":
-        directory = Path(resolve_qwen_model(config["qwen_model"]))
+    config = config["tts"]
+    if config["backend"] == "qwen3":
+        directory = Path(resolve_qwen_model(config["qwen3"]["model"]))
         if not directory.is_dir():
             raise CheckWarning(
                 "配置为在线模型 ID；未检查远程权重及缓存，请先下载到本地再检查。"
@@ -113,7 +132,7 @@ def check_model(config):
             if not any(folder.glob("*.safetensors")):
                 missing.append(str(folder / "*.safetensors"))
     else:
-        directory = Path(config["tts_model_dir"]).expanduser()
+        directory = Path(config["kokoro"]["model_dir"]).expanduser()
         if not directory.is_absolute():
             directory = BASE / directory
         missing = [name for name in MODEL_FILES if not (directory / name).is_file()]
@@ -125,11 +144,12 @@ def check_model(config):
 
 
 def check_ollama(config):
-    url = urlsplit(config["ollama_url"])
+    config = config["llm"]
+    url = urlsplit(config["url"])
     if url.scheme not in ("http", "https") or not url.netloc:
-        raise ValueError("ollama_url 必须为有效的 HTTP/HTTPS 地址。")
+        raise ValueError("llm.url 必须为有效的 HTTP/HTTPS 地址。")
     if not url.path.endswith("/api/chat"):
-        raise ValueError("当前检查要求 ollama_url 的路径以 /api/chat 结尾。")
+        raise ValueError("当前检查要求 llm.url 的路径以 /api/chat 结尾。")
     tags_url = urlunsplit(url._replace(path=url.path[:-4] + "tags", fragment=""))
     opener = (
         build_opener(ProxyHandler({}))
@@ -177,7 +197,6 @@ def main():
         f"当前：{sys.prefix}\n预期：{expected}\n建议使用 ..\\.venv\\Scripts\\python.exe。",
     )
     install_hint = "使用 ..\\.venv\\Scripts\\python.exe -m pip install -r requirements.txt 安装依赖。"
-    report.check("依赖版本", check_requirements, install_hint)
     report.check(
         "依赖兼容性",
         lambda: command([sys.executable, "-m", "pip", "check"]),
@@ -188,16 +207,22 @@ def main():
         load_config,
         "检查 config.json 的字段、类型和取值。",
         describe=lambda value: (
-            f"当前后端：{value['tts_backend']}；对话模型：{value['model']}"
+            f"当前后端：{value['tts']['backend']}；对话模型：{value['llm']['model']}"
         ),
     )
     if config is not None:
         report.check(
-            "TTS 模型文件",
-            lambda: check_model(config),
-            "按 docs/tts.md 下载模型并核对配置中的路径。",
+            "当前后端依赖版本",
+            lambda: check_requirements(config["tts"]["backend"]),
+            install_hint,
         )
-        if config["tts_backend"] == "qwen3":
+        if config["tts"]["backend"] != "volcengine":
+            report.check(
+                "TTS 模型文件",
+                lambda: check_model(config),
+                "按 docs/tts.md 下载模型并核对配置中的路径。",
+            )
+        if config["tts"]["backend"] == "qwen3":
             smi = shutil.which("nvidia-smi")
             if smi:
                 report.check(
@@ -249,7 +274,7 @@ print('BF16 运算结果:', value)
                 ),
                 install_hint,
             )
-        else:
+        elif config["tts"]["backend"] == "kokoro":
             report.check(
                 "Kokoro 与音频依赖导入",
                 lambda: command(
@@ -261,14 +286,33 @@ print('BF16 运算结果:', value)
                 ),
                 install_hint,
             )
+        else:
+            report.check(
+                "火山凭据配置",
+                lambda: check_volcengine(config),
+                "在启动 LocalTalk 的 PowerShell 中设置密钥环境变量，见 docs/tts.md。",
+            )
+            report.check(
+                "HTTP 与 MP3 解码依赖",
+                lambda: command(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import soundfile as sf, requests; "
+                        "assert 'MP3' in sf.available_formats(), '当前 libsndfile 不支持 MP3'; "
+                        "print('HTTP 依赖和 MP3 格式支持可用')",
+                    ]
+                ),
+                install_hint,
+            )
         report.check(
             "Ollama 服务与模型",
             lambda: check_ollama(config),
-            "启动 Ollama，检查 ollama_url 和 ollama list；缺少模型时使用 ollama pull 下载。",
+            "启动 Ollama，检查 llm.url 和 ollama list；缺少模型时使用 ollama pull 下载。",
         )
     print(f"\n检查完成：{report.errors} 项失败，{report.warnings} 项需注意。")
     print(
-        "此检查不合成或播放声音，不证明模型文件完整、音质或 LLM 与 TTS 同时运行时显存足够。"
+        "此检查不合成或播放声音，也不调用火山接口；不证明模型文件完整、云端权限、音质或显存足够。"
     )
     return 1 if report.errors else 0
 

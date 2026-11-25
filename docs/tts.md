@@ -1,6 +1,6 @@
 # TTS 选型与切换
 
-仓库配置默认选择 Qwen3 GPU 后端，接入代码仅经过静态检查，尚未在目标 GPU 上验证。Kokoro CPU 后端已有 Windows 使用反馈，可通过同一份配置切换；程序不会自动切换、卸载 Ollama 或修改上下文配置。
+仓库配置默认选择 Qwen3 GPU 后端，接入代码仅经过静态检查，尚未在目标 GPU 上验证。Kokoro CPU 后端已有 Windows 使用反馈；另已接入火山 Seed-TTS 3.0 HTTP 流式语音合成，尚未进行真实云端试听。可通过同一份配置切换；程序不会自动切换、卸载 Ollama 或修改上下文配置。
 
 ## 怎么选
 
@@ -8,6 +8,7 @@
 | --- | --- | --- |
 | Kokoro v1.1 / CPU | 保持已有播放速度，给大模型留出显存 | 可切换的 CPU 后端 |
 | Qwen3-TTS 0.6B CustomVoice / GPU | 比较另一套中文声音，无需参考录音 | 配置默认后端，依赖已合并到 requirements.txt |
+| 火山 Seed-TTS 3.0 / 云端 | 不占本地 TTS 显存，分句提交并复用音频缓存 | 已接入 HTTP JSONL，需 API Key 与授权音色 |
 | CosyVoice 3 / GPU | 希望进一步探索声音克隆和中文语音能力 | 未接入，暂作候选 |
 
 Qwen 的 0.6B CustomVoice 提供预设声音，中文可先对比 Serena、Vivian、Uncle_Fu。较大的 1.7B 不作为 8GB 显卡与 Ollama 共用时的首选。当前接入不提供情绪指令或数值语速调整；0.6B 的指令能力应以官方代码和型号表为准，不能将 1.7B 的能力直接套用过来。[Qwen 官方说明](https://github.com/QwenLM/Qwen3-TTS)、[模型与音色](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice)
@@ -54,20 +55,21 @@ Qwen 的 0.6B CustomVoice 提供预设声音，中文可先对比 Serena、Vivia
 在项目根目录执行统一环境检查，无需再复制多段临时 Python 命令：
 
 ```powershell
-..\.venv\Scripts\python.exe .\check_env.py
+..\.venv\Scripts\python.exe -m scripts.check_env
 ```
 
 脚本使用运行它的解释器，显示其路径、基础环境、版本、位数，以及是否使用仓库上级的 `.venv`；复用主程序的配置校验和 Qwen 路径解析，不依赖已安装的 TTS 包才能启动。
 
-- 依赖：读取唯一的 `requirements.txt` 核对已安装版本，并执行 `pip check` 检查传递依赖兼容性。
+- 依赖：读取唯一的 `requirements.txt`，仅核对公共依赖和所选后端依赖的已安装版本，并执行 `pip check` 检查传递依赖兼容性。
 - 模型：按当前后端检查本地关键文件。在线 Qwen 模型 ID 只提示尚未验证，不触发下载；文件存在不代表哈希、完整分片或模型内容已验证。
 - Qwen：通过 `nvidia-smi` 显示显卡、驱动及总量 / 已用 / 剩余显存（MiB），在 `cuda:0` 上执行小规模 BF16 矩阵乘法，预期结果为 `32.0`；另行检查 Qwen 与音频依赖能否导入。
 - Kokoro：检查 sherpa-onnx 与音频依赖导入，不要求 CUDA 运算通过。
+- 火山：检查配置的密钥环境变量非空、HTTP 依赖和 MP3 解码支持，不检查本地 TTS 模型或 CUDA；不建立云端连接，不验证鉴权、音色权限或余额。
 - Ollama：从配置的对话地址访问对应的 `/api/tags`，检查服务是否可访问、指定模型是否已安装，不运行对话模型。
 
 每项显示“通过 / 注意 / 失败”和必要的处理建议，一项失败后继续检查其余独立项目；配置无效时跳过依赖配置的检查。外部命令单项超时 60 秒，Ollama 连接超时 5 秒。存在失败项时退出码为 1，否则为 0；只有注意项时仍需阅读提示，不能当作完整功能验收。
 
-脚本不安装依赖、下载模型、合成或播放音频。显存是检查时的快照，不证明 LLM 与 TTS 同时运行时显存足够；声卡输出、音质、完整模型加载仍需实际启动验证。报告包含本机路径，公开反馈前请脱敏。
+脚本不安装依赖、下载模型、调用火山、合成或播放音频。显存是检查时的快照，不证明 LLM 与 TTS 同时运行时显存足够；声卡输出、音质、完整模型加载仍需实际启动验证。报告包含本机路径，公开反馈前请脱敏。
 
 ## 模型目录
 
@@ -75,13 +77,15 @@ Qwen 的 0.6B CustomVoice 提供预设声音，中文可先对比 Serena、Vivia
 
 ```json
 {
-  "tts_model_dir": "../kokoro-multi-lang-v1_1",
-  "qwen_model": "../Qwen3-TTS-12Hz-0.6B-CustomVoice",
-  "audio_output_dir": "../output/segments"
+  "tts": {
+    "audio_output_dir": "../output/segments",
+    "kokoro": { "model_dir": "../kokoro-multi-lang-v1_1" },
+    "qwen3": { "model": "../Qwen3-TTS-12Hz-0.6B-CustomVoice" }
+  }
 }
 ```
 
-以上是完整 `config.json` 中的路径字段，不要用这个片段覆盖整个文件。路径以脚本所在目录为基准，也可以使用其他目录的绝对路径。`*_desc` 仅作说明，不参与推理，不会发送给 Ollama。
+以上是完整 `config.json` 中的路径字段，不要用这个片段覆盖整个文件。路径以脚本所在目录为基准，也可以使用其他目录的绝对路径。各分组的 `desc` 仅作说明，不参与推理，不会发送给 Ollama。
 
 本地路径建议以 `../`、`./` 开头或使用绝对路径。明确指定的本地目录不存在时，程序会提示先下载或修正路径。也可填写 Hugging Face 模型 ID，由官方加载接口下载到其缓存；要保持上面的目录结构，使用下方下载命令并保留默认相对路径。
 
@@ -110,20 +114,63 @@ curl.exe -L --fail --retry 3 -C - -o ../kokoro-multi-lang-v1_1.tar.bz2 "https://
 
 ## 配置并启动
 
-仓库的 `config.json` 默认启用 `qwen3`、0.6B CustomVoice 和 Serena 音色。`speech_speed` 保持 `1.0`，当前接入不提供 Qwen 数值语速控制。Kokoro 的 `speaker_id`、`tts_model_dir` 和 `tts_threads` 在 Qwen 后端不生效。
+仓库的 `config.json` 默认启用 `qwen3`、0.6B CustomVoice 和 Serena 音色。当前接入不提供 Qwen 数值语速控制，`tts.kokoro` 内的配置只影响 Kokoro。
 
 ```powershell
 ..\.venv\Scripts\python.exe .\chat_tts.py
 ```
 
-切换至 Kokoro 只需修改 `tts_backend` 为 `kokoro`，使用相同命令重启。无需更换环境或依赖文件。旧配置没有 `tts_backend` 时仍使用 Kokoro。
+切换至 Kokoro 只需修改 `tts.backend` 为 `kokoro`，使用相同命令重启。无需更换环境或依赖文件。旧平铺配置需按新版分组整理。
 
 当前 Qwen 调用 `generate_custom_voice` 完成一个片段后再播放，不是模型内部逐音频帧的流式输出。Base 声音克隆和 VoiceDesign 尚未接入，不能只替换模型目录就使用。
 
+## 火山 Seed-TTS 3.0 HTTP 流式
+
+实现依据[火山官方 HTTP 流式文档](https://docs.volcengine.com/docs/doubao-voice/seed-tts-3-0-http-streaming?lang=zh)。此接口返回 JSONL，每行一个 JSON 事件，并非带 `data:` 前缀的标准 SSE。先在控制台开通服务、创建 API Key，并取得账号有权限的[音色 ID](https://docs.volcengine.com/docs/doubao-voice/voice-list-3-0-1?lang=zh)。仓库不预填音色，避免使用没有权限或不兼容的 ID。
+
+1. 在 `config.json` 中将 `tts.backend` 改为 `volcengine`，填写 `tts.volcengine.voice_id`。
+2. 在同一个 PowerShell 窗口中设置密钥环境变量，再检查并启动；真实密钥不要写入配置或提交到 Git：
+
+```powershell
+$env:VOLCENGINE_TTS_API_KEY = "替换为你的 API Key"
+..\.venv\Scripts\python.exe -m scripts.check_env
+..\.venv\Scripts\python.exe .\chat_tts.py
+```
+
+该变量仅对当前窗口及其子进程生效。`tts.volcengine.api_key_env` 可以改为其他环境变量名。修改配置后重启。
+
+沿用已有环境时，按统一环境步骤更新 `requirements.txt`。仅使用云端 TTS、不安装本地语音模型依赖时，可在同一个虚拟环境中安装所需依赖：
+
+```powershell
+..\.venv\Scripts\python.exe -m pip install "requests>=2.32,<3" "soundfile>=0.13,<1" "packaging>=24,<26" "ruff==0.17.6"
+```
+
+此路径不安装 PyTorch、Kokoro 或 Qwen；Ollama 仍需单独准备。后续切回本地 TTS 时再安装完整依赖。
+
+| 配置（均在 `tts.volcengine` 内） | 默认值 / 说明 |
+| --- | --- |
+| `voice_id` | 必填，账号可用音色 ID |
+| `api_key_env` | `VOLCENGINE_TTS_API_KEY`，仅存变量名 |
+| `language_code` | `zh` |
+| `sample_rate` | `24000` Hz |
+| `timeout_seconds` | `60`，网络读取超时；连接最多等 10 秒 |
+| `voice_settings.speed` / `volume` | `1.0`；各自范围 0.5～2.0 |
+| `voice_settings.pitch` | `0`；范围 -12～12 的整数 |
+
+所有 TTS 复用同一套大模型输出分段算法。火山的三个阶段门槛在 `tts.volcengine.chunking` 下配置：`first_min_chars`、`second_min_chars`、`later_min_chars`，默认分别为 11、20、20。前两段遇普通标点可提前提交，后续段优先句尾；所有片段使用全局 `tts.chunk_chars` 上限，默认 60，末尾短句始终保留。Qwen 和 Kokoro 在各自子组下配置相同的三个字段。详细规则见[分段播放](usage.md#分段播放与延迟)。
+
+每个片段先查本地缓存，未命中才通过 HTTPS POST 发送完整片段。HTTP 客户端复用 Session；逐行读取 JSONL，按顺序解码 `audio` 中的 Base64 音频，收到 `TTS_STREAM_FINAL_REASON_CLOSED` 并读完响应后解码 MP3。**每个片段收齐后播放，片段内尚非逐音频帧播放。** 播放当前片段时继续准备下一段，不等待整篇回答。
+
+一次 HTTPS 请求完整收取并成功解码的音频转为一个 WAV 缓存文件，使用文本和声音设置的 BLAKE2b 128 位摘要命名；开场语也参与复用；保留最近使用的 100 个不同片段，不为每次播放或网络音频包重复建文件。键包含实际合成文本、模型、音色和声音参数，密钥及超时不参与；更换这些声音设置不会误用旧音频。
+
+服务错误、超时、提前断流或解码失败会停止本轮，不自动重试，避免重复朗读；失败片段不缓存，之前完整生成的缓存保留。`Ctrl+C` 会等待当前 HTTP 合成请求或 Windows 同步播放结束；请求受连接与读取超时限制，并非即时取消或静音。
+
+启用火山后，未命中缓存的回答片段与开场语会发送至云端，并可能产生费用；不额外上传问题和对话历史作为 TTS 上下文。缺少真实凭据及目标 Windows 环境，目前仅完成静态检查，尚未验证音色权限、实际延迟、音质和连续播放效果。
+
 ## 比较与验证
 
-先测试短句，再用相同故事比较音质、首段提交播放时间、片段间等待和实时率。同时用 `nvidia-smi` 观察与 Ollama 同时运行的显存占用；显存不足时可以尝试将 `context_tokens` 从 32768 降为 16384，但这不保证一定够用。
+先测试短句，再用相同故事比较音质、首段提交播放时间、片段间等待和实时率。同时用 `nvidia-smi` 观察与 Ollama 同时运行的显存占用；显存不足时可以尝试将 `llm.context_tokens` 从 32768 降为 16384，但这不保证一定够用。
 
-播放完成的片段写入 `audio_output_dir`，默认是仓库上一级的 `output/segments`，按目录内本程序命名的文件保留最近 100 段。旧音频不会自动搬迁；若需要沿用历史，可在停机后迁入新目录，下次保存音频时执行保留数量清理。
+完整生成的片段写入 `tts.audio_output_dir`，默认是仓库上一级的 `output/segments`。比较新合成性能时需考虑缓存命中；缓存保留与旧文件处理见[音频缓存说明](usage.md#音频缓存与复用)。
 
 Qwen3 和 [CosyVoice 3](https://github.com/QwenAudio/CosyVoice) 的代码与模型分别遵循其原始许可证；本项目不分发它们的权重。

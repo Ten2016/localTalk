@@ -1,45 +1,51 @@
 import re
 
 
-MIN_CHUNK_CHARS = 20
-SENTENCE_END = re.compile(r"[。！？!?；;\n]|\.(?=\s)")
-FIRST_CHUNK_END = re.compile(r"[，：]|(?<!\d)[,:]|" + SENTENCE_END.pattern)
+SENTENCE_END = re.compile(r"""[。！？!?]+[”’"」』）】》]*|\.(?=\s)|\n""")
+EARLY_END = re.compile(r"[。！？!?，、；：;\n]|(?<!\d)[,:]|\.(?=\s)")
+SOFT_END = re.compile(r"[，、；：;]|(?<!\d)[,:](?!\d)|\s")
 
 
 class TextChunks:
     def __init__(self, config):
-        self.config = config
+        tts = config["tts"]
+        chunking = tts[tts["backend"]]["chunking"]
+        self.limit = tts["chunk_chars"]
+        self.minimums = (
+            chunking["first_min_chars"],
+            chunking["second_min_chars"],
+            chunking["later_min_chars"],
+        )
         self.buffer = ""
-        self.first = True
-        self.previous_chars = 0
+        self.chunks = 0
 
     def feed(self, text, final=False):
         self.buffer += text
         while self.buffer:
-            limit = self.config["first_chunk_chars" if self.first else "chunk_chars"]
-            if not self.first:
-                # 按中文字符数近似约束下一段耗时，避免短音频之后突然合成长段。
-                limit = min(limit, max(MIN_CHUNK_CHARS, self.previous_chars * 3 // 2))
+            early = self.chunks < 2
+            minimum = self.minimums[min(self.chunks, 2)]
+            boundary = EARLY_END if early else SENTENCE_END
             end = 0
-            pattern = FIRST_CHUNK_END if self.first else SENTENCE_END
-            for match in pattern.finditer(self.buffer):
-                if MIN_CHUNK_CHARS <= match.end() <= limit and re.search(
-                    r"\w", self.buffer[: match.end()]
+            for match in boundary.finditer(self.buffer):
+                if match.end() > self.limit:
+                    break
+                # 前两段遇到标点立即提交，后续段留一个字符观察句尾引号。
+                if minimum <= match.end() and (
+                    early or final or match.end() < len(self.buffer)
                 ):
                     end = match.end()
                     break
-            if not end and len(self.buffer) >= limit:
-                # 长句优先在逗号或空格处分段；没有边界时保留全部字符硬切。
-                boundaries = list(re.finditer(r"[，,、：:\s]", self.buffer[:limit]))
-                end = boundaries[-1].end() if boundaries else limit
-                if end < max(MIN_CHUNK_CHARS, limit // 2):
-                    end = limit
+            if not end and len(self.buffer) > self.limit:
+                for match in SOFT_END.finditer(self.buffer[: self.limit + 1]):
+                    if minimum <= match.end() <= self.limit:
+                        end = match.end()
+                if not end:
+                    end = self.limit
             if not end:
                 if not final:
                     break
                 end = len(self.buffer)
             chunk, self.buffer = self.buffer[:end], self.buffer[end:]
             if chunk.strip():
-                self.first = False
-                self.previous_chars = len(chunk.strip())
-                yield chunk
+                self.chunks += 1
+            yield chunk

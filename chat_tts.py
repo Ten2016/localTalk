@@ -54,13 +54,23 @@ def run_turn(session, tts, config, messages):
     print(
         f"首段文本：{first_text_seconds:.2f} 秒；"
         f"首段提交播放：{pipeline.first_play_seconds:.2f} 秒；"
-        f"已播放：{pipeline.played_chunks} 段"
+        f"已播放：{pipeline.played_chunks} 段；缓存命中：{pipeline.cache_hits} 段"
     )
-    print(
-        f"累计合成：{pipeline.synthesis_seconds:.2f} 秒；"
-        f"音频长度：{pipeline.audio_seconds:.2f} 秒；"
-        f"实时率：{pipeline.synthesis_seconds / pipeline.audio_seconds:.2f}"
-    )
+    if config["tts"]["backend"] == "volcengine":
+        print(
+            f"合成请求：{pipeline.synthesis_seconds:.2f} 秒（含网络等待）；"
+            f"音频长度：{pipeline.audio_seconds:.2f} 秒"
+        )
+    else:
+        print(
+            f"累计合成：{pipeline.synthesis_seconds:.2f} 秒；"
+            f"音频长度：{pipeline.audio_seconds:.2f} 秒"
+        )
+        if pipeline.generated_audio_seconds:
+            print(
+                "新合成音频实时率："
+                f"{pipeline.synthesis_seconds / pipeline.generated_audio_seconds:.2f}"
+            )
     print(
         f"片段间等待：累计 {pipeline.playback_gap_seconds:.2f} 秒；"
         f"最长 {pipeline.max_playback_gap_seconds:.2f} 秒"
@@ -79,49 +89,56 @@ def main():
 
     config = load_config()
     print(f"LocalTalk {VERSION} · 本地语音助手")
-    print(f"正在加载语音模型（{config['tts_backend']}）……", flush=True)
+    print(f"正在初始化语音后端（{config['tts']['backend']}）……", flush=True)
     tts = create_tts(config)
-    print(f"模型：{config['model']}")
-    print(
-        f"上下文：{config['context_tokens']}；最大输出：{config['max_output_tokens']}"
-    )
-    if config["startup_text"].strip():
-        print(f"开场语音：{config['startup_text']}", flush=True)
-        greeting = SpeechPipeline(tts, config, perf_counter(), save_audio=False)
-        try:
-            greeting.put(greeting.text_queue, config["startup_text"])
-            greeting.finish()
-        except (RuntimeError, ValueError, OSError) as exc:
-            print(f"开场语音未完成：{exc}")
-        finally:
-            greeting.cancel()
-    print("输入问题开始对话；/clear 清空历史；/quit 退出。")
-    history = []
-    with requests.Session() as session:
-        if config["ollama_url"].startswith(("http://127.0.0.1:", "http://localhost:")):
-            session.trust_env = False
-        while True:
-            question = input("\n你：").strip()
-            if not question:
-                continue
-            if question == "/quit":
-                return
-            if question == "/clear":
-                history.clear()
-                print("对话历史已清空。")
-                continue
+    try:
+        print(f"模型：{config['llm']['model']}")
+        print(
+            f"上下文：{config['llm']['context_tokens']}；最大输出：{config['llm']['max_output_tokens']}"
+        )
+        if config["tts"]["startup_text"].strip():
+            print(f"开场语音：{config['tts']['startup_text']}", flush=True)
+            greeting = SpeechPipeline(tts, config, perf_counter())
             try:
-                messages = prepare_messages(config, history, question)
-                answer = run_turn(session, tts, config, messages)
-            except (
-                requests.RequestException,
-                RuntimeError,
-                ValueError,
-                OSError,
-            ) as exc:
-                print(f"\n本轮未完成：{exc}\n已停止排队音频，本轮不写入对话历史。")
-                continue
-            history = messages[1:] + [{"role": "assistant", "content": answer}]
+                greeting.put(greeting.text_queue, config["tts"]["startup_text"])
+                greeting.finish()
+            except (RuntimeError, ValueError, OSError) as exc:
+                print(f"开场语音未完成：{exc}")
+            finally:
+                greeting.cancel()
+        print("输入问题开始对话；/clear 清空历史；/quit 退出。")
+        history = []
+        with requests.Session() as session:
+            if config["llm"]["url"].startswith(
+                ("http://127.0.0.1:", "http://localhost:")
+            ):
+                session.trust_env = False
+            while True:
+                question = input("\n你：").strip()
+                if not question:
+                    continue
+                if question == "/quit":
+                    return
+                if question == "/clear":
+                    history.clear()
+                    print("对话历史已清空。")
+                    continue
+                try:
+                    messages = prepare_messages(config, history, question)
+                    answer = run_turn(session, tts, config, messages)
+                except (
+                    requests.RequestException,
+                    RuntimeError,
+                    ValueError,
+                    OSError,
+                ) as exc:
+                    print(f"\n本轮未完成：{exc}\n已停止排队音频，本轮不写入对话历史。")
+                    continue
+                history = messages[1:] + [{"role": "assistant", "content": answer}]
+    finally:
+        close = getattr(tts, "close", None)
+        if close is not None:
+            close()
 
 
 if __name__ == "__main__":

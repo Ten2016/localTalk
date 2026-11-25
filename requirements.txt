@@ -3,6 +3,7 @@
 sherpa-onnx>=2.0.2,<3
 soundfile>=0.13,<1
 requests>=2.32,<3
+packaging>=24,<26
 qwen-tts==0.1.1
 torch==2.10.0+cu128
 torchaudio==2.10.0+cu128
