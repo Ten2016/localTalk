@@ -46,8 +46,8 @@ class QwenTTS:
         self.speaker = config["speaker"]
         self.cache_identity = {
             "backend": "qwen3",
-            "model": model,
-            "speaker": self.speaker,
+            "model": Path(model).name,
+            "voice": self.speaker.lower(),
         }
 
     def generate(self, text):

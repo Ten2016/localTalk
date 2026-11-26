@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import platform
@@ -10,9 +11,11 @@ from urllib.parse import urlsplit, urlunsplit
 from urllib.request import ProxyHandler, build_opener
 
 from localtalk import VERSION
+from localtalk.asr import model_files as asr_model_files
 from localtalk.config import BASE, load_config
 from localtalk.tts.kokoro import MODEL_FILES
 from localtalk.tts.qwen import resolve_qwen_model
+from localtalk.vad import model_file as vad_model_file
 
 
 class CheckWarning(Exception):
@@ -62,12 +65,14 @@ def command(args):
     return output[-6000:] or "命令执行成功。"
 
 
-def check_requirements(backend):
+def check_requirements(backend, voice=False):
     required = {"soundfile", "requests", "packaging", "ruff"} | {
         "kokoro": {"sherpa-onnx"},
         "qwen3": {"qwen-tts", "torch", "torchaudio", "modelscope"},
         "volcengine": set(),
     }[backend]
+    if voice:
+        required |= {"sherpa-onnx", "onnxruntime", "numpy", "sounddevice"}
     return command(
         [
             sys.executable,
@@ -109,6 +114,44 @@ def check_volcengine(config):
     if not os.environ.get(name, "").strip():
         raise ValueError(f"环境变量 {name} 未设置或为空。")
     return f"环境变量 {name} 已设置；未连接火山，不验证密钥、音色权限或余额。"
+
+
+def check_voice_models(config):
+    files = list(asr_model_files(config["asr"]["qwen3"]).values())
+    files.append(vad_model_file(config["vad"]["silero"]))
+    missing = [
+        str(path) for path in files if not path.is_file() or path.stat().st_size == 0
+    ]
+    if missing:
+        raise FileNotFoundError(f"缺少或为空：{', '.join(missing)}")
+    return "ASR 与 VAD 本地关键文件存在；未加载模型、核验版本或校验权重哈希。"
+
+
+def check_voice_dependencies(config):
+    return command(
+        [
+            sys.executable,
+            "-c",
+            """
+import json
+import sys
+import numpy
+import onnxruntime as ort
+import sherpa_onnx
+import sounddevice as sd
+
+if not hasattr(sherpa_onnx.OfflineRecognizer, 'from_qwen3_asr'):
+    raise RuntimeError('当前 sherpa-onnx 不支持 Qwen3-ASR')
+if 'CPUExecutionProvider' not in ort.get_available_providers():
+    raise RuntimeError('ONNX Runtime 缺少 CPUExecutionProvider')
+device = json.loads(sys.argv[1])
+print(sd.query_devices(device, 'input'))
+sd.check_input_settings(device=device, channels=1, dtype='float32', samplerate=16000)
+print('Qwen3-ASR API、ONNX CPU 和 16kHz 单声道输入设置可用；未录音或运行模型。')
+""",
+            json.dumps(config["input"]["microphone_device"]),
+        ]
+    )
 
 
 def check_model(config):
@@ -172,6 +215,13 @@ def check_ollama(config):
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="检查 LocalTalk 环境，不运行语音模型。"
+    )
+    parser.add_argument(
+        "--voice", action="store_true", help="同时检查语音模型及麦克风设置"
+    )
+    args = parser.parse_args()
     print(f"LocalTalk {VERSION} · 环境检查", flush=True)
     print(f"解释器：{sys.executable}\n基础环境：{sys.base_prefix}")
     report = Report()
@@ -211,9 +261,10 @@ def main():
         ),
     )
     if config is not None:
+        voice = args.voice or config["input"]["mode"] == "voice"
         report.check(
             "当前后端依赖版本",
-            lambda: check_requirements(config["tts"]["backend"]),
+            lambda: check_requirements(config["tts"]["backend"], voice),
             install_hint,
         )
         if config["tts"]["backend"] != "volcengine":
@@ -304,6 +355,17 @@ print('BF16 运算结果:', value)
                     ]
                 ),
                 install_hint,
+            )
+        if voice:
+            report.check(
+                "ASR / VAD 模型文件",
+                lambda: check_voice_models(config),
+                "按 docs/asr.md 准备仓库外的 ASR 和 Silero 6.3 模型。",
+            )
+            report.check(
+                "语音输入依赖与麦克风设置",
+                lambda: check_voice_dependencies(config),
+                "安装 requirements.txt，检查 Windows 麦克风权限与 input.microphone_device。",
             )
         report.check(
             "Ollama 服务与模型",

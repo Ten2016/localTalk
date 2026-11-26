@@ -36,8 +36,8 @@ class VolcengineTTS:
         }
         self.cache_identity = {
             "backend": "volcengine",
-            "model_id": self.parameters["model_id"],
-            "voice_id": config["voice_id"],
+            "model": self.parameters["model_id"],
+            "voice": config["voice_id"],
             "language_code": config["language_code"],
             "sample_rate": config["sample_rate"],
             "voice_settings": config["voice_settings"],

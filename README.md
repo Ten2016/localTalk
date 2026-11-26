@@ -6,7 +6,7 @@ LocalTalk 将 Ollama 与中文语音合成连接起来，在自己的电脑上�
 
 回答流式显示，按句分段合成并顺序播放，无需等整篇回答结束。相同文本和声音设置优先复用本地音频，减少重复合成与云端调用。
 
-文本收到即显示，音频独立排队播放。支持多轮对话、音色配置、Kokoro 语速调整、旧历史裁剪，以及最近使用的 100 段音频缓存。当前是 **Windows 键盘对话原型**；麦克风、ASR、VAD 和 STM32/ESP32 接入尚未实现。
+文本收到即显示，音频独立排队播放。支持键盘与本地语音输入、多轮对话、音色配置、旧历史裁剪，以及最近使用的 1000 段音频缓存。语音模式使用 CPU 上的 Qwen3-ASR INT8 和 Silero VAD 6.3，说完停顿后自动回答；尚不支持语音打断和 STM32/ESP32 接入。
 
 ## 快速开始
 
@@ -19,8 +19,9 @@ H:/tts/
 ├── .venv/
 ├── kokoro-multi-lang-v1_1/
 ├── Qwen3-TTS-12Hz-0.6B-CustomVoice/
-├── output/
-│   └── segments/
+├── sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25/
+├── silero-vad-v6.3/
+├── tts-cache/
 └── localTalk/
     ├── chat_tts.py
     ├── config.json
@@ -63,7 +64,8 @@ H:/tts/
 | `tts.backend` | `qwen3`，可切换为 `kokoro` 或 `volcengine` |
 | `tts.kokoro.model_dir` | `../kokoro-multi-lang-v1_1` |
 | `tts.qwen3.model` | `../Qwen3-TTS-12Hz-0.6B-CustomVoice` |
-| `tts.audio_output_dir` | `../output/segments` |
+| `input.mode` | `keyboard`，准备模型后可改为 `voice` |
+| `tts.audio_output_dir` | `../tts-cache` |
 
 配置中每个分组的 `desc` 集中说明参数用途、可选值及试听链接；修改分组内的实际字段才会改变设置。模型已经下载时不需要重复下载；准备或迁移模型见 [TTS 部署说明](docs/tts.md#模型目录)。火山只需配置 `tts.volcengine` 和密钥环境变量，见[接入步骤](docs/tts.md#火山-seed-tts-30-http-流式)。
 
@@ -74,6 +76,8 @@ H:/tts/
 ```
 
 确认 `ollama list` 中有配置指定的模型。仅在尚未下载默认对话模型时执行 `ollama pull qwen3.5:4b-q4_K_M`。
+
+使用语音输入时，先按[本地语音输入](docs/asr.md)准备仓库外的 ASR、VAD 模型，再运行 `..\.venv\Scripts\python.exe -m scripts.check_env --voice`；只用键盘无需准备这两份模型。
 
 ### 3. 检查并启动
 
@@ -131,12 +135,14 @@ git pull --ff-only
 | 操作 | 效果 |
 | --- | --- |
 | 输入问题并回车 | 流式显示回答，并分段朗读 |
+| `/voice` | 加载本地模型，进入连续语音对话 |
+| 语音监听或识别时 `Ctrl+C` | 取消本次输入，返回键盘 |
 | `/clear` | 清空当前对话历史 |
 | `/quit` | 退出程序 |
 | 修改 `tts.kokoro.speaker_id` | 选择 Kokoro 音色，重启生效 |
 | 修改 `tts.qwen3.speaker` | 选择 Qwen 音色，重启生效 |
 | 修改 `tts.kokoro.speed` | 调整 Kokoro 语速，`1.0` 为默认，大于 1 更快 |
-| 打开 `tts.audio_output_dir` 指定的目录 | 回听最近使用的 100 个缓存片段 |
+| 打开 `tts.audio_output_dir` 指定的目录 | 回听最近使用的 1000 个缓存片段 |
 | 修改 `tts.backend` | 重启后切换 `kokoro`、`qwen3` 或 `volcengine` |
 
 中文女声可先对比 `3` 和 `40`，男声可试 `58` 和 `59`；这些是试听起点，不代表质量排名。完整参数、音色对应关系和排障说明见[使用说明](docs/usage.md)。
@@ -145,13 +151,13 @@ Qwen 中文声音可先对比 Serena、Vivian 和 Uncle_Fu，通过 `tts.qwen3.s
 
 ## 使用须知
 
-- 当前需等本轮播放结束后再输入下一问，尚不支持语音打断；退出时会等待正在合成或播放的片段完成。
+- 当前需等本轮播放结束后再输入下一问；语音模式在回答期间关闭麦克风，尚不支持语音打断或回声消除；退出时会等待正在合成或播放的片段完成。
 - 历史只保存在内存中，退出后清空；长对话按保守估算裁剪，不是长期记忆。
 - 首段合成后即可播放，但短片段之间仍可能有停顿；分段播放不保证减少总合成时间。
 - `config.json` 随仓库管理；模型、虚拟环境和生成音频在 Git 忽略范围内。音频可能包含对话内容，请勿直接作为问题附件公开。
 - 本地 LLM 和 TTS 权重需单独下载，分别遵循其原始许可；本项目不会校验或纠正模型回答。
 - 选择火山时，未命中缓存的助手回答片段及开场语会发送到云端，调用可能产生费用；API Key 仅从环境变量读取，不写入仓库。
-- Kokoro 分段播放已有 Windows 使用反馈；当前分层配置与火山接入只完成静态检查，仍需在目标电脑上验证。
+- Kokoro 分段播放已有 Windows 使用反馈；ASR/VAD、当前分层配置与火山接入只完成静态检查，仍需在目标电脑上验证。
 
 ## 相关项目
 
@@ -159,4 +165,4 @@ Qwen 中文声音可先对比 Serena、Vivian 和 Uncle_Fu，通过 `tts.qwen3.s
 
 项目代码采用 [MIT 许可证](LICENSE)，第三方依赖和模型分别遵循其原始许可。
 
-[使用说明](docs/usage.md) · [更新日志](CHANGELOG.md) · [贡献指南](CONTRIBUTING.md) · [MIT 许可证](LICENSE)
+[使用说明](docs/usage.md) · [本地语音输入](docs/asr.md) · [更新日志](CHANGELOG.md) · [贡献指南](CONTRIBUTING.md) · [MIT 许可证](LICENSE)

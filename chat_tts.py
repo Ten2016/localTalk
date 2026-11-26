@@ -4,6 +4,7 @@ from time import perf_counter
 
 from localtalk import VERSION
 from localtalk.config import load_config
+from localtalk.microphone import VoiceInput
 from localtalk.ollama import prepare_messages, stream_chat
 from localtalk.speech import SpeechPipeline
 from localtalk.text import TextChunks
@@ -106,23 +107,45 @@ def main():
                 print(f"开场语音未完成：{exc}")
             finally:
                 greeting.cancel()
-        print("输入问题开始对话；/clear 清空历史；/quit 退出。")
+        print("输入问题开始对话；/voice 进入语音模式；/clear 清空历史；/quit 退出。")
         history = []
+        voice = None
+        voice_mode = config["input"]["mode"] == "voice"
         with requests.Session() as session:
             if config["llm"]["url"].startswith(
                 ("http://127.0.0.1:", "http://localhost:")
             ):
                 session.trust_env = False
             while True:
-                question = input("\n你：").strip()
-                if not question:
-                    continue
-                if question == "/quit":
-                    return
-                if question == "/clear":
-                    history.clear()
-                    print("对话历史已清空。")
-                    continue
+                if voice_mode:
+                    try:
+                        if voice is None:
+                            print("正在加载本地 ASR 与 VAD（CPU）……", flush=True)
+                            voice = VoiceInput(config)
+                        question = voice.listen()
+                    except KeyboardInterrupt:
+                        voice_mode = False
+                        print("\n已返回键盘输入。")
+                        continue
+                    except Exception as exc:
+                        voice_mode = False
+                        print(
+                            f"\n语音输入未完成：{exc}\n已返回键盘输入，本轮没有提交。"
+                        )
+                        continue
+                else:
+                    question = input("\n你：").strip()
+                    if not question:
+                        continue
+                    if question == "/quit":
+                        return
+                    if question == "/clear":
+                        history.clear()
+                        print("对话历史已清空。")
+                        continue
+                    if question == "/voice":
+                        voice_mode = True
+                        continue
                 try:
                     messages = prepare_messages(config, history, question)
                     answer = run_turn(session, tts, config, messages)

@@ -50,8 +50,8 @@ class KokoroTTS:
         self.speed = config["speed"]
         self.cache_identity = {
             "backend": "kokoro",
-            "model": str(model_dir.resolve()),
-            "speaker_id": self.speaker,
+            "model": model_dir.resolve().name,
+            "voice": self.speaker,
             "speed": self.speed,
         }
 

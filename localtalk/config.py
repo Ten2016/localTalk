@@ -5,6 +5,50 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parent.parent
 
 
+def validate_voice_config(config):
+    for name in ("input", "asr", "vad"):
+        if not isinstance(config.get(name), dict):
+            raise ValueError(f"config.json 缺少 {name} 分组，请按新版配置整理。")
+    if config["input"].get("mode") not in ("keyboard", "voice"):
+        raise ValueError("input.mode 仅支持 keyboard 或 voice。")
+    if "microphone_device" not in config["input"]:
+        raise ValueError("input.microphone_device 必须配置为 null 或输入设备编号。")
+    device = config["input"]["microphone_device"]
+    if device is not None and (type(device) is not int or device < 0):
+        raise ValueError("input.microphone_device 必须为 null 或非负设备编号。")
+    for name, backend, path_name in (
+        ("asr", "qwen3", "model_dir"),
+        ("vad", "silero", "model_path"),
+    ):
+        group = config[name]
+        if group.get("backend") != backend or not isinstance(group.get(backend), dict):
+            raise ValueError(f"{name}.backend 仅支持 {backend}，并需要对应配置子组。")
+        path = group[backend].get(path_name)
+        if not isinstance(path, str) or not path.strip():
+            raise ValueError(f"{name}.{backend}.{path_name} 必须为非空路径。")
+    asr = config["asr"]["qwen3"]
+    if type(asr.get("threads")) is not int or asr["threads"] <= 0:
+        raise ValueError("asr.qwen3.threads 必须为正整数。")
+    if not isinstance(asr.get("language"), str):
+        raise ValueError("asr.qwen3.language 必须为字符串，留空自动识别。")
+    threshold = config["vad"]["silero"].get("threshold")
+    if (
+        type(threshold) not in (int, float)
+        or not math.isfinite(threshold)
+        or not 0 < threshold < 1
+    ):
+        raise ValueError("vad.silero.threshold 必须在 0 和 1 之间。")
+    for name, lower, upper in (
+        ("min_speech_ms", 32, 1000),
+        ("end_silence_ms", 100, 3000),
+        ("pre_roll_ms", 160, 1000),
+        ("max_utterance_seconds", 5, 30),
+    ):
+        value = config["vad"].get(name)
+        if type(value) is not int or not lower <= value <= upper:
+            raise ValueError(f"vad.{name} 必须为 {lower}～{upper} 的整数。")
+
+
 def load_config():
     config_path = BASE / "config.json"
     if not config_path.exists():
@@ -105,4 +149,5 @@ def load_config():
             raise ValueError(
                 "tts.volcengine.voice_settings.pitch 必须为 -12～12 的整数。"
             )
+    validate_voice_config(config)
     return config

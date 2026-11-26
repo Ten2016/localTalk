@@ -4,7 +4,7 @@ import queue
 import threading
 from time import perf_counter
 
-from .audio_cache import AudioCache, audio_key
+from .audio_cache import AudioCache
 
 if os.name == "nt":
     import winsound
@@ -15,7 +15,7 @@ class SpeechPipeline:
         self.tts = tts
         self.config = config["tts"]
         self.start = start
-        self.cache = AudioCache(self.config["audio_output_dir"])
+        self.cache = AudioCache(self.config["audio_output_dir"], tts.cache_identity)
         self.cancelled = threading.Event()
         self.errors = queue.Queue()
         # 只排队文本，避免音频反压阻塞 Ollama 读取；单轮输出已有 token 上限。
@@ -75,7 +75,7 @@ class SpeechPipeline:
                 text = text.strip()
                 if not text:
                     continue
-                key = audio_key(text, self.tts.cache_identity)
+                key = self.cache.key(text)
                 cached = self.cache.load(key)
                 if cached is None:
                     start = perf_counter()

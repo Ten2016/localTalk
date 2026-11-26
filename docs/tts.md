@@ -11,6 +11,20 @@
 | 火山 Seed-TTS 3.0 / 云端 | 不占本地 TTS 显存，分句提交并复用音频缓存 | 已接入 HTTP JSONL，需 API Key 与授权音色 |
 | CosyVoice 3 / GPU | 希望进一步探索声音克隆和中文语音能力 | 未接入，暂作候选 |
 
+### 当前选型复核（2026-11-25）
+
+当前使用的 `Qwen3-TTS-12Hz-0.6B-CustomVoice` 仍在[官方发布模型列表](https://github.com/QwenLM/Qwen3-TTS#released-models-description-and-download)中；本次核查未找到更新一代的官方开源轻量替代，PyPI 的 [qwen-tts 最新发布仍为 0.1.1](https://pypi.org/project/qwen-tts/)，与项目固定版本一致。模型权重、推理包版本和运行速度是三件事，不能只按版本号判断音质。
+
+| 候选 | 已确认的能力 | 对本项目的判断 |
+| --- | --- | --- |
+| Qwen3-TTS 0.6B CustomVoice | 官方预设音色，已有接入和用户试听反馈 | 保留为默认，优先沿用满意的音色 |
+| [Fun-CosyVoice3-0.5B-2512](https://github.com/QwenAudio/CosyVoice) | 双向流式、音色克隆和方言控制 | 同级候选；需参考音频、额外部署和目标电脑试听，不能据此认定比 Qwen 更好 |
+| [MOSS-TTS-Nano](https://github.com/OpenMOSS/MOSS-TTS-Nano) | 2026 年发布，约 100M 参数，支持中文、ONNX CPU、流式输出及声音克隆 | 最值得补充试听的轻量候选，可减少显存竞争；尚未接入或验证 Windows 性能与听感 |
+| [IndexTTS 2.5](https://github.com/index-tts/index-tts) | 2026 年发布，扩展语言、语速和情绪控制，并改进推理速度 | 能力更丰富，尚无本项目机器上与 LLM 共存的资源和延迟证据 |
+| [VoxCPM2](https://github.com/OpenBMB/VoxCPM) | 2026 年发布，2B、30 语种、声音设计和克隆 | 官方参考显存约 8GB，不优先用于当前 8GB 显卡与 Ollama 共存 |
+
+以上是官方资料复核，不是统一环境下的音质排名。Qwen 1.7B 是同一系列更大的模型，不是新版；也不能把其指令控制能力直接套用到 0.6B。当前只记录候选，不新增 TTS 后端、下载权重或改动已有音频缓存。后续比较应固定文本，分别记录主观听感、错读漏读、首段等待、片段间停顿和资源峰值。
+
 Qwen 的 0.6B CustomVoice 提供预设声音，中文可先对比 Serena、Vivian、Uncle_Fu。较大的 1.7B 不作为 8GB 显卡与 Ollama 共用时的首选。当前接入不提供情绪指令或数值语速调整；0.6B 的指令能力应以官方代码和型号表为准，不能将 1.7B 的能力直接套用过来。[Qwen 官方说明](https://github.com/QwenLM/Qwen3-TTS)、[模型与音色](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice)
 
 这是值得试听的替代方案，不是已经证实比当前音色更好的结果。对于 i5-10600KF、RTX 5060 8GB、16GB 内存的组合，剩余约 3GB 显存是否足够仍需实测：模型权重之外还有运行缓存和临时张量。接入保持相同分段与队列策略，但换模型后合成耗时可能不同，不能保证维持 Kokoro 的实时率或连贯性。
@@ -78,7 +92,7 @@ Qwen 的 0.6B CustomVoice 提供预设声音，中文可先对比 Serena、Vivia
 ```json
 {
   "tts": {
-    "audio_output_dir": "../output/segments",
+    "audio_output_dir": "../tts-cache",
     "kokoro": { "model_dir": "../kokoro-multi-lang-v1_1" },
     "qwen3": { "model": "../Qwen3-TTS-12Hz-0.6B-CustomVoice" }
   }
@@ -161,7 +175,7 @@ $env:VOLCENGINE_TTS_API_KEY = "替换为你的 API Key"
 
 每个片段先查本地缓存，未命中才通过 HTTPS POST 发送完整片段。HTTP 客户端复用 Session；逐行读取 JSONL，按顺序解码 `audio` 中的 Base64 音频，收到 `TTS_STREAM_FINAL_REASON_CLOSED` 并读完响应后解码 MP3。**每个片段收齐后播放，片段内尚非逐音频帧播放。** 播放当前片段时继续准备下一段，不等待整篇回答。
 
-一次 HTTPS 请求完整收取并成功解码的音频转为一个 WAV 缓存文件，使用文本和声音设置的 BLAKE2b 128 位摘要命名；开场语也参与复用；保留最近使用的 100 个不同片段，不为每次播放或网络音频包重复建文件。键包含实际合成文本、模型、音色和声音参数，密钥及超时不参与；更换这些声音设置不会误用旧音频。
+一次 HTTPS 请求完整收取并成功解码的音频转为一个 WAV 缓存文件，使用文本和声音设置的 BLAKE2b 128 位摘要命名；开场语也参与复用；保留最近使用的 1000 个不同片段，不为每次播放或网络音频包重复建文件。键包含实际合成文本、模型、音色和声音参数，密钥及超时不参与；更换这些声音设置不会误用旧音频。
 
 服务错误、超时、提前断流或解码失败会停止本轮，不自动重试，避免重复朗读；失败片段不缓存，之前完整生成的缓存保留。`Ctrl+C` 会等待当前 HTTP 合成请求或 Windows 同步播放结束；请求受连接与读取超时限制，并非即时取消或静音。
 
@@ -171,6 +185,6 @@ $env:VOLCENGINE_TTS_API_KEY = "替换为你的 API Key"
 
 先测试短句，再用相同故事比较音质、首段提交播放时间、片段间等待和实时率。同时用 `nvidia-smi` 观察与 Ollama 同时运行的显存占用；显存不足时可以尝试将 `llm.context_tokens` 从 32768 降为 16384，但这不保证一定够用。
 
-完整生成的片段写入 `tts.audio_output_dir`，默认是仓库上一级的 `output/segments`。比较新合成性能时需考虑缓存命中；缓存保留与旧文件处理见[音频缓存说明](usage.md#音频缓存与复用)。
+完整生成的片段写入 `tts.audio_output_dir`，默认是仓库上一级的 `tts-cache`。比较新合成性能时需考虑缓存命中；缓存保留与旧文件处理见[音频缓存说明](usage.md#音频缓存与复用)。
 
 Qwen3 和 [CosyVoice 3](https://github.com/QwenAudio/CosyVoice) 的代码与模型分别遵循其原始许可证；本项目不分发它们的权重。

@@ -6,10 +6,37 @@
     "context_tokens": 32768,
     "max_output_tokens": 4096
   },
-  "tts": {
-    "desc": "语音合成公共配置。backend 选择 qwen3、kokoro 或 volcengine；audio_output_dir 为 WAV 缓存目录，相对路径以项目根目录为准，保留最近使用的 100 个不同片段，包含开场语；startup_text 留空关闭开场语。chunk_chars 为所有片段的最大长度，默认 60。各后端的 chunking 分别配置首段、第二段、后续段遇标点可提交的最短长度，默认 11、20、20，均为不超过上限的正整数。前两段可沿普通标点提交，后续优先句尾，短尾段始终保留。修改后重启。",
+  "input": {
+    "desc": "输入方式。mode 为 keyboard 或 voice；默认 keyboard，运行时输入 /voice 可进入连续语音对话，监听时 Ctrl+C 返回键盘。microphone_device 留 null 使用系统默认麦克风，或填 sounddevice 列出的输入设备编号。麦克风仅在等待提问时打开，助手回答期间关闭。",
+    "mode": "keyboard",
+    "microphone_device": null
+  },
+  "asr": {
     "backend": "qwen3",
-    "audio_output_dir": "../output/segments",
+    "qwen3": {
+      "desc": "Qwen3-ASR 0.6B INT8，CPU 推理。model_dir 为仓库外的完整 sherpa-onnx 模型目录；threads 为推理线程数，先用 2；language 默认 Chinese，可填 English、Cantonese 等官方语言名，留空自动识别。语音停止后整段识别，不是边说边出字。",
+      "model_dir": "../sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25",
+      "threads": 2,
+      "language": "Chinese"
+    }
+  },
+  "vad": {
+    "desc": "自动录音边界。min_speech_ms 为有效语音累计最短时长；end_silence_ms 为说完后等待的连续静音；pre_roll_ms 保留开始前的音频以保护首字；max_utterance_seconds 为单次录音上限（5～30 秒），超限会明确提示并取消整轮，不将截断录音当成完整问题。段内音频及结束等待期间的音频完整送入 ASR。",
+    "backend": "silero",
+    "min_speech_ms": 160,
+    "end_silence_ms": 800,
+    "pre_roll_ms": 320,
+    "max_utterance_seconds": 30,
+    "silero": {
+      "desc": "Silero VAD 6.3 的官方 ONNX 模型，固定在 CPU 上以单线程处理 16kHz 单声道音频。model_path 指向仓库外的本地文件，运行时不下载。threshold 为语音概率门槛，默认 0.5；越高越保守，需结合麦克风及噪声调整。",
+      "model_path": "../silero-vad-v6.3/silero_vad.onnx",
+      "threshold": 0.5
+    }
+  },
+  "tts": {
+    "desc": "语音合成公共配置。backend 选择 qwen3、kokoro 或 volcengine；audio_output_dir 为 WAV 缓存根目录，按供应商/模型/音色分层，相对路径以项目根目录为准，保留最近使用的 1000 个不同片段，包含开场语；startup_text 留空关闭开场语。chunk_chars 为所有片段的最大长度，默认 60。各后端的 chunking 分别配置首段、第二段、后续段遇标点可提交的最短长度，默认 11、20、20，均为不超过上限的正整数。前两段可沿普通标点提交，后续优先句尾，短尾段始终保留。修改后重启。",
+    "backend": "qwen3",
+    "audio_output_dir": "../tts-cache",
     "startup_text": "你好，我在，请问有什么可以帮你？",
     "chunk_chars": 60,
     "kokoro": {
